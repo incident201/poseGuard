@@ -44,7 +44,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.5.0"
+          gradle-version: "9.6.0"
 
       - name: Create empty .env
         run: |
