@@ -151,7 +151,16 @@ enum class FaceCheckMode {
     Disabled
 }
 
-enum class AppLanguage { Russian, English }
+enum class AppLanguage(val languageTag: String, val labelRes: Int) {
+    English("en-US", R.string.language_english),
+    Russian("ru-RU", R.string.language_russian),
+    Spanish("es-ES", R.string.language_spanish),
+    Italian("it-IT", R.string.language_italian),
+    German("de-DE", R.string.language_german),
+    French("fr-FR", R.string.language_french);
+
+    val locale: Locale get() = Locale.forLanguageTag(languageTag)
+}
 
 internal fun accelerationModeAfterAppUpdate(
     savedMode: AccelerationMode,
@@ -407,7 +416,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
 
     private fun tr(resId: Int, vararg args: Any): String {
-        val locale = if (_gameSettings.value.language == AppLanguage.Russian) Locale.forLanguageTag("ru-RU") else Locale.US
+        val locale = _gameSettings.value.language.locale
         val config = android.content.res.Configuration(getApplication<Application>().resources.configuration)
         config.setLocale(locale)
         val res = getApplication<Application>().createConfigurationContext(config).resources

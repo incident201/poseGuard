@@ -111,6 +111,10 @@ The application supports:
 
 - English
 - Russian
+- Spanish
+- Italian
+- German
+- French
 
 ## Status
 

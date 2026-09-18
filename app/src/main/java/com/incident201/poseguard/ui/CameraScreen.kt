@@ -118,7 +118,7 @@ private const val DEMO_FRAME_DELAY_MS = 40L
 private enum class TimelapseUiState { Preparing, Ready, Saving, Saved, Unavailable, Disabled }
 
 private fun localeFor(language: AppLanguage): Locale =
-    if (language == AppLanguage.Russian) Locale.forLanguageTag("ru-RU") else Locale.US
+    language.locale
 
 private val POSE_CONNECTIONS = listOf(
     11 to 12,
@@ -264,6 +264,9 @@ fun CameraScreen(
     var pendingTimelapseFile by remember { mutableStateOf<File?>(null) }
     var timelapseUiState by remember { mutableStateOf(TimelapseUiState.Disabled) }
     var pendingPoseDebugJson by remember { mutableStateOf<String?>(null) }
+    val poseDebugSavedText = localizedString(gameSettings.language, R.string.pose_debug_saved)
+    val poseDebugSaveFailedText = localizedString(gameSettings.language, R.string.pose_debug_save_failed)
+    val poseDebugNoDataText = localizedString(gameSettings.language, R.string.pose_debug_no_data)
     val poseDebugSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
@@ -274,7 +277,7 @@ fun CameraScreen(
             val saved = withContext(Dispatchers.IO) { savePoseDebugJson(context, uri, json) }
             Toast.makeText(
                 context,
-                if (saved) "Pose debug JSON saved" else "Failed to save pose debug JSON",
+                if (saved) poseDebugSavedText else poseDebugSaveFailedText,
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -970,7 +973,7 @@ fun CameraScreen(
                     onClick = {
                         val json = viewModel.buildPoseDebugSnapshotJson()
                         if (json == null) {
-                            Toast.makeText(context, "No pose data to save", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, poseDebugNoDataText, Toast.LENGTH_SHORT).show()
                         } else {
                             pendingPoseDebugJson = json
                             poseDebugSaveLauncher.launch(poseDebugFileName())
@@ -987,6 +990,7 @@ fun CameraScreen(
                 AccelerationDebugIndicator(
                     state = landmarkerAccelerationState,
                     mode = gameSettings.accelerationMode,
+                    language = gameSettings.language,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 10.dp)
@@ -1094,19 +1098,24 @@ fun CameraScreen(
 private fun AccelerationDebugIndicator(
     state: AccelerationState,
     mode: AccelerationMode,
+    language: AppLanguage,
     modifier: Modifier = Modifier
 ) {
     val (label, detail) = when (state) {
-        AccelerationState.InitializingCpu -> "CPU…" to "initializing"
+        AccelerationState.InitializingCpu -> "CPU…" to localizedString(language, R.string.acceleration_initializing)
         AccelerationState.Cpu -> "CPU" to null
         is AccelerationState.InitializingGpu -> {
             val elapsedSeconds = state.elapsedMs / 1000L
             val label = if (mode == AccelerationMode.Gpu) "GPU…" else "CPU → GPU…"
-            label to if (elapsedSeconds > 0L) "${elapsedSeconds}s" else "initializing"
+            label to if (elapsedSeconds > 0L) {
+                localizedFormatString(language, R.string.seconds_short, elapsedSeconds)
+            } else {
+                localizedString(language, R.string.acceleration_initializing)
+            }
         }
         AccelerationState.Gpu -> "GPU" to null
-        is AccelerationState.CpuFallback -> "CPU" to "GPU fallback: ${state.reason}"
-        is AccelerationState.Error -> "ERROR" to state.reason
+        is AccelerationState.CpuFallback -> "CPU" to localizedFormatString(language, R.string.acceleration_fallback_detail, state.reason)
+        is AccelerationState.Error -> localizedString(language, R.string.acceleration_error) to state.reason
     }
 
     Surface(
@@ -2171,7 +2180,7 @@ fun BottomHUDEngine(
                     val stateHeadline = when (gameState) {
                         GameState.Idle -> localizedString(language, R.string.waiting_to_start)
                         GameState.WaitingForStabilization -> localizedString(language, R.string.device_stabilization)
-                        GameState.StartingDelay -> "${localizedString(language, R.string.start_in)} ${startDelayRemainingSeconds}s"
+                        GameState.StartingDelay -> localizedFormatString(language, R.string.start_countdown, startDelayRemainingSeconds)
                         GameState.HoldingPose -> localizedString(language, R.string.holding_pose)
                         GameState.Success -> localizedString(language, R.string.congrats_victory)
                         GameState.Failed -> localizedString(language, R.string.failed)
@@ -2188,7 +2197,7 @@ fun BottomHUDEngine(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp,
-                        maxLines = 1
+                        maxLines = 2
                     )
                     Text(
                         text = statusMessage,
