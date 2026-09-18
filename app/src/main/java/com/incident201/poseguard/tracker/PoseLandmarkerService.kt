@@ -1,16 +1,11 @@
 package com.incident201.poseguard.tracker
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
-import com.google.mediapipe.framework.image.BitmapImageBuilder
-import com.google.mediapipe.tasks.core.BaseOptions
+import com.incident201.poseguard.BuildConfig
 import com.google.mediapipe.tasks.core.Delegate
-import com.google.mediapipe.tasks.vision.core.RunningMode
-import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
-import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -37,11 +32,12 @@ sealed interface AccelerationState {
     data class Error(val reason: String) : AccelerationState
 }
 
-class PoseLandmarkerService(
+internal class PoseLandmarkerService(
     context: Context,
     initialAccelerationMode: AccelerationMode,
     private val model: PoseLandmarkerModel,
-    private val listener: LandmarkerListener
+    private val listener: LandmarkerListener,
+    private val engineFactory: PoseLandmarkerFactory = MediaPipePoseLandmarkerFactory(context.applicationContext, model)
 ) {
     private val appContext = context.applicationContext
     private val stateLock = Any()
@@ -154,10 +150,10 @@ class PoseLandmarkerService(
         backendsToClose.distinct().forEach(LandmarkerBackend::close)
     }
 
-    fun detectLiveStreamFrame(bitmap: Bitmap, timestamp: Long): Boolean {
+    fun detectLiveStreamFrame(frame: CameraFrame, timestamp: Long): Boolean {
         if (isClosed) return false
         val backend = activeBackend ?: return false
-        return backend.detect(bitmap, timestamp)
+        return backend.detect(frame, timestamp)
     }
 
     private fun startCpuBackendLocked() {
@@ -300,6 +296,18 @@ class PoseLandmarkerService(
     private fun onBackendInitializationFailed(backend: LandmarkerBackend, error: Throwable) {
         val shouldNotify: Boolean
         synchronized(stateLock) {
+            // A timed-out/closed worker can finish much later, after a manual mode change
+            // or a new probe. Its failure must not rewrite the new session's state/cache.
+            val isCurrent = when (backend.delegate) {
+                Delegate.CPU -> cpuBackend === backend
+                Delegate.GPU -> gpuBackend === backend
+                else -> false
+            }
+            if (isClosed || !isCurrent) {
+                Log.i(TAG, "delegate_init_failure_ignored delegate=${backend.delegate} stale=true")
+                backend.close()
+                return
+            }
             when (backend.delegate) {
                 Delegate.CPU -> {
                     if (cpuBackend === backend) cpuBackend = null
@@ -366,6 +374,7 @@ class PoseLandmarkerService(
         }
 
         synchronized(stateLock) {
+            if (isClosed || activeBackend !== backend) return
             if (activeBackend === backend) activeBackend = null
             if (gpuBackend === backend) gpuBackend = null
             cpuFallbackReason = compactError(error)
@@ -378,91 +387,26 @@ class PoseLandmarkerService(
         backend.close()
     }
 
-    private fun createLandmarker(backend: LandmarkerBackend): PoseLandmarker {
-        backend.initializationStage = "building_options"
+    private fun createLandmarker(backend: LandmarkerBackend): PoseLandmarkerEngine {
+        backend.initializationStage = "create_from_options"
         Log.i(
             TAG,
             "delegate_init_start delegate=${backend.delegate} mode=$accelerationMode " +
                 "thread=${Thread.currentThread().name} model=${model.assetPath} gpuCache=disabled"
         )
-        val baseOptionsBuilder = BaseOptions.builder()
-            .setModelAssetPath(model.assetPath)
-            .setDelegate(backend.delegate)
-
-        val options = PoseLandmarker.PoseLandmarkerOptions.builder()
-            .setBaseOptions(baseOptionsBuilder.build())
-            .setRunningMode(RunningMode.LIVE_STREAM)
-            .setNumPoses(1)
-            .setMinPoseDetectionConfidence(0.70f)
-            .setMinPosePresenceConfidence(0.70f)
-            .setMinTrackingConfidence(0.75f)
-            .setResultListener { result, image ->
-                val timestampMs = result.timestampMs()
+        return engineFactory.create(
+            backend.delegate,
+            onResult = { pose, width, height, timestampMs ->
                 if (isClosed || activeBackend !== backend) {
                     dropFrame(timestampMs)
                 } else {
                     backend.logFirstResult(timestampMs)
-                    processResult(result, image.width, image.height, timestampMs)
-                    if (backend.delegate == Delegate.CPU) {
-                        startGpuAfterFirstCpuResult(backend)
-                    }
+                    deliverResults(pose, width, height, timestampMs)
+                    if (backend.delegate == Delegate.CPU) startGpuAfterFirstCpuResult(backend)
                 }
-            }
-            .setErrorListener { error -> onBackendRuntimeError(backend, error) }
-            .build()
-
-        backend.initializationStage = "create_from_options"
-        return PoseLandmarker.createFromOptions(appContext, options)
-            .also { backend.initializationStage = "created" }
-    }
-
-    private fun processResult(
-        result: PoseLandmarkerResult,
-        width: Int,
-        height: Int,
-        timestampMs: Long
-    ) {
-        if (isClosed) return
-        val landmarksList = result.landmarks()
-        if (landmarksList.isNullOrEmpty()) {
-            deliverResults(PoseLandmarks(), width, height, timestampMs)
-            return
-        }
-
-        val firstLandmarks = landmarksList[0]
-        if (firstLandmarks.size < 33) {
-            deliverResults(PoseLandmarks(), width, height, timestampMs)
-            return
-        }
-
-        fun toPosePoint(index: Int): Point3D {
-            val landmark = firstLandmarks[index]
-            return Point3D(
-                x = landmark.x(),
-                y = landmark.y(),
-                z = landmark.z(),
-                visibility = landmark.visibility().orElse(null),
-                presence = landmark.presence().orElse(null)
-            )
-        }
-
-        val allLandmarks = firstLandmarks.indices.map(::toPosePoint)
-        deliverResults(
-            PoseLandmarks(
-                leftShoulder = allLandmarks[11],
-                rightShoulder = allLandmarks[12],
-                leftElbow = allLandmarks[13],
-                rightElbow = allLandmarks[14],
-                leftHip = allLandmarks[23],
-                rightHip = allLandmarks[24],
-                leftKnee = allLandmarks[25],
-                rightKnee = allLandmarks[26],
-                allLandmarks = allLandmarks
-            ),
-            width,
-            height,
-            timestampMs
-        )
+            },
+            onError = { error -> onBackendRuntimeError(backend, error) }
+        ).also { backend.initializationStage = "created" }
     }
 
     private fun deliverResults(pose: PoseLandmarks, width: Int, height: Int, timestampMs: Long) {
@@ -526,7 +470,7 @@ class PoseLandmarkerService(
     }
 
     private fun currentGpuCompatibilitySignature(): String =
-        "${Build.FINGERPRINT}|$GPU_PROBE_VERSION|${model.assetPath}"
+        "${Build.FINGERPRINT}|${BuildConfig.VERSION_CODE}|$GPU_PROBE_VERSION|${model.assetPath}"
 
     fun close() {
         val backends = synchronized(stateLock) {
@@ -553,7 +497,8 @@ class PoseLandmarkerService(
         private val closing = AtomicBoolean(false)
         private val firstFrameSubmitted = AtomicBoolean(false)
         private val firstResultDelivered = AtomicBoolean(false)
-        private var landmarker: PoseLandmarker? = null
+        private var landmarker: PoseLandmarkerEngine? = null
+        private val submissionPending = AtomicBoolean(false)
         private var initializationStartedAtMs: Long = 0L
 
         @Volatile var initializationStage: String = "queued"
@@ -592,26 +537,29 @@ class PoseLandmarkerService(
             }
         }
 
-        fun detect(bitmap: Bitmap, timestamp: Long): Boolean {
+        fun detect(frame: CameraFrame, timestamp: Long): Boolean {
             if (!ready.get() || closing.get() || activeBackend !== this) return false
+            if (!submissionPending.compareAndSet(false, true)) return false
+            if (!frame.retain()) {
+                submissionPending.set(false)
+                return false
+            }
             return try {
                 executor.execute {
-                    if (isClosed || closing.get() || activeBackend !== this || bitmap.isRecycled) {
-                        dropFrame(timestamp)
-                        return@execute
-                    }
-
-                    val currentLandmarker = landmarker
-                    if (currentLandmarker == null) {
-                        dropFrame(timestamp)
-                        return@execute
-                    }
-
                     try {
+                        if (isClosed || closing.get() || activeBackend !== this) {
+                            dropFrame(timestamp)
+                            return@execute
+                        }
+                        val currentLandmarker = landmarker
+                        if (currentLandmarker == null) {
+                            dropFrame(timestamp)
+                            return@execute
+                        }
                         if (firstFrameSubmitted.compareAndSet(false, true)) {
                             Log.i(TAG, "delegate_first_frame delegate=$delegate timestampMs=$timestamp")
                         }
-                        currentLandmarker.detectAsync(BitmapImageBuilder(bitmap).build(), timestamp)
+                        currentLandmarker.detectAsync(frame.image, timestamp)
                     } catch (error: Throwable) {
                         Log.e(TAG, "Error in detectLiveStreamFrame with $delegate delegate", error)
                         dropFrame(timestamp)
@@ -620,10 +568,15 @@ class PoseLandmarkerService(
                         } else {
                             deliverError(error.message ?: "MediaPipe detect error")
                         }
+                    } finally {
+                        frame.close()
+                        submissionPending.set(false)
                     }
                 }
                 true
             } catch (_: RejectedExecutionException) {
+                frame.close()
+                submissionPending.set(false)
                 false
             }
         }

@@ -279,4 +279,6 @@
     <string name="acceleration_fallback_detail">Alternativa a GPU: %1$s</string>
     <string name="acceleration_error">ERROR</string>
     <string name="seconds_short">%1$d s</string>
+    <string name="session_stopped">Sesión detenida</string>
+    <string name="face_check_unavailable">La detección del rostro no está disponible. La sesión se ha detenido sin añadir ninguna penalización. Inténtalo de nuevo.</string>
 </resources>

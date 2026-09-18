@@ -283,4 +283,6 @@
     <string name="acceleration_fallback_detail">Откат с GPU: %1$s</string>
     <string name="acceleration_error">ОШИБКА</string>
     <string name="seconds_short">%1$d с</string>
+    <string name="session_stopped">Сессия остановлена</string>
+    <string name="face_check_unavailable">Проверка лица недоступна. Сессия остановлена без дополнительного штрафа. Попробуйте ещё раз.</string>
 </resources>

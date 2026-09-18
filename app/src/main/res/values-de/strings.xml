@@ -279,4 +279,6 @@
     <string name="acceleration_fallback_detail">GPU-Rückfall: %1$s</string>
     <string name="acceleration_error">FEHLER</string>
     <string name="seconds_short">%1$d Sek.</string>
+    <string name="session_stopped">Sitzung gestoppt</string>
+    <string name="face_check_unavailable">Die Gesichtserkennung ist nicht verfügbar. Die Sitzung wurde ohne zusätzliche Strafe gestoppt. Bitte versuche es erneut.</string>
 </resources>

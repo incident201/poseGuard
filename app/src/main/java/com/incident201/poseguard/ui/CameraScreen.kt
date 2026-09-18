@@ -154,7 +154,7 @@ private val POSE_CONNECTIONS = listOf(
 internal fun localizedString(language: AppLanguage, @StringRes id: Int): String {
     val context = LocalContext.current
     val locale = localeFor(language)
-    val config = android.content.res.Configuration(context.resources.configuration)
+    val config = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current)
     config.setLocale(locale)
     return context.createConfigurationContext(config).resources.getString(id)
 }
@@ -167,7 +167,7 @@ internal fun localizedFormatString(
 ): String {
     val context = LocalContext.current
     val locale = localeFor(language)
-    val config = android.content.res.Configuration(context.resources.configuration)
+    val config = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current)
     config.setLocale(locale)
     return context.createConfigurationContext(config).resources.getString(id, *args)
 }
@@ -243,7 +243,7 @@ fun CameraScreen(
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                viewModel.pauseIntifaceSessionSignals()
+                viewModel.onCameraUnavailable()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -472,12 +472,14 @@ fun CameraScreen(
     // MediaPipe Setup
     val cameraExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val lastPoseTimestampMs = remember { AtomicLong(0L) }
+    val cameraBindingGeneration = remember { AtomicLong(0L) }
     var imageAnalysisRef by remember { mutableStateOf<ImageAnalysis?>(null) }
     var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var boundLensFacing by remember { mutableStateOf<Int?>(null) }
     var availableLensFacings by remember { mutableStateOf<List<Int>>(emptyList()) }
     var selectedLensFacing by rememberSaveable { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
     var landmarkerService by remember { mutableStateOf<PoseLandmarkerService?>(null) }
+    val landmarkerGeneration = remember { AtomicLong(0L) }
     var landmarkerAccelerationState by remember {
         mutableStateOf<AccelerationState>(AccelerationState.InitializingCpu)
     }
@@ -504,6 +506,7 @@ fun CameraScreen(
     }
 
     LaunchedEffect(context, gameSettings.poseLandmarkerModel) {
+        val generation = landmarkerGeneration.incrementAndGet()
         val previousService = landmarkerService
         landmarkerService = null
         previousService?.close()
@@ -518,15 +521,17 @@ fun CameraScreen(
             }
 
             override fun onResults(result: com.incident201.poseguard.tracker.PoseLandmarks, imageWidth: Int, imageHeight: Int, timestampMs: Long) {
+                if (landmarkerGeneration.get() != generation) return
                 viewModel.processMediaPipeResults(result, timestampMs, imageWidth, imageHeight)
             }
 
             override fun onFrameDropped(timestampMs: Long) {
-                viewModel.dropCameraFrame(timestampMs, recycle = true)
+                viewModel.dropCameraFrame(timestampMs)
             }
 
             override fun onAccelerationStateChanged(state: AccelerationState) {
                 ContextCompat.getMainExecutor(context).execute {
+                    if (landmarkerGeneration.get() != generation) return@execute
                     landmarkerAccelerationState = state
                     when (state) {
                         AccelerationState.Gpu ->
@@ -547,6 +552,8 @@ fun CameraScreen(
     // Clean up
     DisposableEffect(Unit) {
         onDispose {
+            landmarkerGeneration.incrementAndGet()
+            cameraBindingGeneration.incrementAndGet()
             imageAnalysisRef?.clearAnalyzer()
             imageAnalysisRef = null
             runCatching { cameraProviderRef?.unbindAll() }
@@ -555,7 +562,7 @@ fun CameraScreen(
             boundLensFacing = null
             landmarkerService?.close()
             landmarkerService = null
-            viewModel.clearCameraFrameCache(recycle = true)
+            viewModel.clearCameraFrameCache()
             cameraExecutor.shutdown()
             demoBitmap?.recycleIfNeeded()
             demoBitmap = null
@@ -654,7 +661,9 @@ fun CameraScreen(
     }
 
     fun bindCamera(previewView: PreviewView, requestedLensFacing: Int) {
+        val bindingGeneration = cameraBindingGeneration.incrementAndGet()
         fun bindWithProvider(cameraProvider: ProcessCameraProvider) {
+            if (cameraBindingGeneration.get() != bindingGeneration) return
             cameraProviderRef = cameraProvider
 
             val backCameraAvailable = runCatching {
@@ -936,12 +945,11 @@ fun CameraScreen(
                             }
                         },
                         onRelease = { previewView ->
+                            cameraBindingGeneration.incrementAndGet()
                             imageAnalysisRef?.clearAnalyzer()
                             imageAnalysisRef = null
                             runCatching {
-                                val provider = cameraProviderRef
-                                    ?: ProcessCameraProvider.getInstance(previewView.context).get()
-                                provider.unbindAll()
+                                cameraProviderRef?.unbindAll()
                             }.onFailure {
                                 Log.w("CameraScreen", "Failed to unbind camera on release", it)
                             }
@@ -1062,6 +1070,7 @@ fun CameraScreen(
         BottomHUDEngine(
             language = gameSettings.language,
             gameState = gameState,
+            stoppedByTechnicalError = sessionSummary?.stoppedByTechnicalError == true,
             statusMessage = statusMessage,
             defeatReason = defeatReason,
             timerSeconds = timerSeconds,
@@ -1246,7 +1255,11 @@ private fun FinalSessionScreen(
     val titleColor = if (isSuccess) colorScheme.tertiary else colorScheme.error
     val title = localizedString(
         language,
-        if (isSuccess) R.string.final_completed else R.string.final_failed
+        when {
+            summary.stoppedByTechnicalError -> R.string.session_stopped
+            isSuccess -> R.string.final_completed
+            else -> R.string.final_failed
+        }
     )
     val faceDirectionLabel = faceDirectionLabelFor(summary.settings.faceCheckMode)
 
@@ -1896,6 +1909,7 @@ private fun AudioCueAnnouncer(viewModel: GameViewModel, settings: GameSettings) 
 fun BottomHUDEngine(
     language: AppLanguage,
     gameState: GameState,
+    stoppedByTechnicalError: Boolean = false,
     statusMessage: String,
     defeatReason: String,
     timerSeconds: Int,
@@ -2183,7 +2197,10 @@ fun BottomHUDEngine(
                         GameState.StartingDelay -> localizedFormatString(language, R.string.start_countdown, startDelayRemainingSeconds)
                         GameState.HoldingPose -> localizedString(language, R.string.holding_pose)
                         GameState.Success -> localizedString(language, R.string.congrats_victory)
-                        GameState.Failed -> localizedString(language, R.string.failed)
+                        GameState.Failed -> localizedString(
+                            language,
+                            if (stoppedByTechnicalError) R.string.session_stopped else R.string.failed
+                        )
                     }
                     val headlineColor = when (gameState) {
                         GameState.Success -> colorScheme.tertiary
@@ -2590,10 +2607,10 @@ private fun submitFrameToPosePipeline(
     landmarkerService: PoseLandmarkerService?,
     timestampMs: Long
 ) {
-    viewModel.registerCameraFrame(bitmap, timestampMs)
-    val accepted = landmarkerService?.detectLiveStreamFrame(bitmap, timestampMs) ?: false
-    if (!accepted) {
-        viewModel.dropCameraFrame(timestampMs, recycle = true)
+    com.incident201.poseguard.tracker.CameraFrame(bitmap).use { frame ->
+        viewModel.registerCameraFrame(frame, timestampMs)
+        val accepted = landmarkerService?.detectLiveStreamFrame(frame, timestampMs) ?: false
+        if (!accepted) viewModel.dropCameraFrame(timestampMs)
     }
 }
 

@@ -494,14 +494,14 @@ Be careful with old preference keys. Some values already have migration/normaliz
 
 ## Localization
 
-The app supports Russian and English via `AppLanguage`.
+The app supports English, Russian, Spanish, Italian, German and French via `AppLanguage`.
 
 `GameViewModel.tr()` selects resources using the current language. Compose UI also uses helper localization functions.
 
 When adding user-facing text:
 
 - add string resources
-- keep Russian and English behavior aligned
+- keep all six language resource sets and formatting placeholders aligned
 - avoid hardcoded visible UI strings
 - keep hardcoded strings only for debug-only messages when appropriate
 
@@ -537,6 +537,12 @@ Face checking is optional and controlled by `FaceCheckMode`:
 - `FaceAwayFromCamera`
 
 Face failures are counted across consecutive frames. A rule violation is triggered only after the threshold is reached. `FaceDetectionStatus.NotProcessed` and `Error` do not directly count as face rule failures.
+
+When the face rule is enabled during HoldingPose, continuous Error/NotProcessed results for
+five seconds stop the session as a technical interruption, without adding violations, penalties,
+defeat audio or punitive Intiface output. FaceVisible and FaceNotVisible are successful detector
+results and reset this outage timer. The preparation countdown is excluded. Session completion
+waits for detector recovery if its timer reaches zero during an outage.
 
 Face detection depends on body crop and face candidate crop. If face behavior is wrong, inspect `PoseFrameCropper`, `FaceCandidateCropper`, `FaceDetectorService`, and `GameViewModel.buildOverlayState()` together.
 
@@ -578,7 +584,10 @@ For Intiface/client integrations, do not reuse a client after server errors unle
 
 Several paths create temporary bitmaps. Be careful with ownership.
 
-- `GameViewModel` recycles cached camera bitmaps after matching or dropping.
+- Camera input uses `tracker/CameraFrame`: submitter, frame cache/result processor, and
+  delegate submission worker each hold an explicit reference. Release that reference with
+  `close()`; do not recycle its bitmap directly. The final reference closes the bitmap-backed
+  MPImage. Cache eviction must not invalidate a frame retained by the delegate worker.
 - `FaceDetectorService` recycles only the ARGB copy it creates internally.
 - `GameViewModel.buildOverlayState()` recycles the face crop bitmap after detection.
 - `TimelapseRecorder` copies offered frames, recycles owned copies, and recycles overlay bitmaps.

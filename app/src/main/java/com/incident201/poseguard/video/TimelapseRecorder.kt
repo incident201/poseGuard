@@ -11,6 +11,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import com.incident201.poseguard.util.formatDurationHmsFromMillis
@@ -25,6 +26,7 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 class TimelapseRecorder(
@@ -37,6 +39,7 @@ class TimelapseRecorder(
     private val lock = Any()
     private val stopMutex = Mutex()
     private val frameExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val pendingFrameSlots = Semaphore(2)
     @Volatile private var isReleased = false
     private var recordingGeneration = 0L
 
@@ -102,59 +105,70 @@ class TimelapseRecorder(
             nextCaptureTimestampMs = timestampMs + CAPTURE_INTERVAL_MS
             recordingStartTimestampMs to recordingGeneration
         }
+        if (!pendingFrameSlots.tryAcquire()) return
 
         val ownedBitmap = try {
             bitmap.copy(Bitmap.Config.ARGB_8888, false)
         } catch (t: Throwable) {
+            pendingFrameSlots.release()
             Log.e(TAG, "Failed to copy timelapse frame", t)
             return
         }
 
-        try {
-            frameExecutor.execute {
-                var frameWithTimer: Bitmap? = null
-                try {
-                    synchronized(lock) {
-                        if (isReleased || recordingGeneration != frameGeneration) {
-                            return@execute
-                        }
-                    }
-                    val recordingElapsedMs = (timestampMs - recordingStartSnapshot).coerceAtLeast(0L)
-                    val timerElapsedMs = synchronized(lock) {
-                        timerStartTimestampMs
-                    }?.let { timerStart ->
-                        (timestampMs - timerStart).coerceAtLeast(0L)
-                    } ?: 0L
-                    ensureEncoder(ownedBitmap)
-                    pendingPresentationTimesUs.addLast((recordingElapsedMs * 1000L) / SPEED_FACTOR)
-                    frameWithTimer = drawFrameOverlays(
-                        source = ownedBitmap,
-                        elapsedMs = timerElapsedMs,
-                        violationsCount = violationsCount,
-                        violationsText = violationsText
-                    )
-                    renderFrameToSurface(frameWithTimer)
-                    drainEncoder(endOfStream = false)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Failed to encode timelapse frame", t)
-                    synchronized(lock) {
-                        if (recordingGeneration == frameGeneration) {
-                            hadEncodingError = true
-                            isRecording = false
-                        }
-                    }
-                    releaseCodecResources(deleteTempFile = true)
-                } finally {
-                    frameWithTimer?.recycleIfNeeded()
-                    ownedBitmap.recycleIfNeeded()
-                }
+        synchronized(lock) {
+            if (isReleased || !isRecording || recordingGeneration != frameGeneration) {
+                ownedBitmap.recycleIfNeeded()
+                pendingFrameSlots.release()
+                return
             }
-        } catch (t: Throwable) {
-            ownedBitmap.recycleIfNeeded()
-            if (t is RejectedExecutionException) {
-                Log.w(TAG, "Ignoring timelapse frame after executor shutdown", t)
-            } else {
-                Log.e(TAG, "Failed to enqueue timelapse frame", t)
+            try {
+                frameExecutor.execute {
+                    var frameWithTimer: Bitmap? = null
+                    try {
+                        synchronized(lock) {
+                            if (isReleased || recordingGeneration != frameGeneration || hadEncodingError) {
+                                return@execute
+                            }
+                        }
+                        val recordingElapsedMs = (timestampMs - recordingStartSnapshot).coerceAtLeast(0L)
+                        val timerElapsedMs = synchronized(lock) {
+                            timerStartTimestampMs
+                        }?.let { timerStart ->
+                            (timestampMs - timerStart).coerceAtLeast(0L)
+                        } ?: 0L
+                        ensureEncoder(ownedBitmap)
+                        pendingPresentationTimesUs.addLast((recordingElapsedMs * 1000L) / SPEED_FACTOR)
+                        frameWithTimer = drawFrameOverlays(
+                            source = ownedBitmap,
+                            elapsedMs = timerElapsedMs,
+                            violationsCount = violationsCount,
+                            violationsText = violationsText
+                        )
+                        renderFrameToSurface(frameWithTimer)
+                        drainEncoder(endOfStream = false)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Failed to encode timelapse frame", t)
+                        synchronized(lock) {
+                            if (recordingGeneration == frameGeneration) {
+                                hadEncodingError = true
+                                isRecording = false
+                            }
+                        }
+                        releaseCodecResources(deleteTempFile = true)
+                    } finally {
+                        frameWithTimer?.recycleIfNeeded()
+                        ownedBitmap.recycleIfNeeded()
+                        pendingFrameSlots.release()
+                    }
+                }
+            } catch (t: Throwable) {
+                ownedBitmap.recycleIfNeeded()
+                pendingFrameSlots.release()
+                if (t is RejectedExecutionException) {
+                    Log.w(TAG, "Ignoring timelapse frame after executor shutdown", t)
+                } else {
+                    Log.e(TAG, "Failed to enqueue timelapse frame", t)
+                }
             }
         }
     }
@@ -188,7 +202,7 @@ class TimelapseRecorder(
                         }
                         outputFile?.takeIf { !hadEncodingError && it.exists() && it.length() > 0L }
                     }
-                }.get()
+                }.get(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to stop timelapse recorder", t)
                 null
@@ -215,19 +229,19 @@ class TimelapseRecorder(
 
     fun release() {
         synchronized(lock) {
+            if (isReleased) return
             recordingGeneration += 1
             isRecording = false
             isReleased = true
         }
         runCatching {
-            frameExecutor.submit {
+            frameExecutor.execute {
                 releaseCodecResources(deleteTempFile = true)
-            }.get()
+            }
         }.onFailure {
             Log.w(TAG, "Failed to release on executor thread", it)
         }
         frameExecutor.shutdown()
-        runCatching { frameExecutor.awaitTermination(2, TimeUnit.SECONDS) }
     }
 
     private fun ensureEncoder(firstFrame: Bitmap) {
@@ -239,6 +253,7 @@ class TimelapseRecorder(
         videoHeight = height
 
         val tempFile = File(context.cacheDir, "pose_timelapse_${UUID.randomUUID()}.mp4")
+        outputFile = tempFile
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, calculateBitrate(width, height))
@@ -247,15 +262,12 @@ class TimelapseRecorder(
         }
 
         val newEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        newEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val surface = newEncoder.createInputSurface()
-        val newMuxer = MediaMuxer(tempFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        newEncoder.start()
-
+        // Publish ownership before each fallible operation so error cleanup sees partial setup.
         encoder = newEncoder
-        inputSurface = surface
-        muxer = newMuxer
-        outputFile = tempFile
+        newEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        inputSurface = newEncoder.createInputSurface()
+        muxer = MediaMuxer(tempFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        newEncoder.start()
     }
 
     private fun drawFrameOverlays(source: Bitmap, elapsedMs: Long, violationsCount: Int, violationsText: String): Bitmap {
@@ -354,8 +366,12 @@ class TimelapseRecorder(
         val encoder = encoder ?: return
         val muxer = muxer ?: return
         val bufferInfo = MediaCodec.BufferInfo()
+        val deadlineMs = SystemClock.elapsedRealtime() + FINALIZE_TIMEOUT_MS
 
         while (true) {
+            if (endOfStream && SystemClock.elapsedRealtime() >= deadlineMs) {
+                error("Timed out waiting for encoder end-of-stream")
+            }
             val outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, DRAIN_TIMEOUT_US)
             when {
                 outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
@@ -414,7 +430,10 @@ class TimelapseRecorder(
         runCatching { inputSurface?.release() }
 
         if (muxerStarted) {
-            runCatching { muxer?.stop() }
+            runCatching { muxer?.stop() }.onFailure {
+                hadEncodingError = true
+                Log.e(TAG, "Failed to finalize MP4 container", it)
+            }
         }
         runCatching { muxer?.release() }
 
@@ -426,7 +445,7 @@ class TimelapseRecorder(
         lastPresentationTimeUs = -1L
         pendingPresentationTimesUs.clear()
 
-        if (deleteTempFile) {
+        if (deleteTempFile || hadEncodingError) {
             outputFile?.delete()
             outputFile = null
         }
@@ -444,6 +463,8 @@ class TimelapseRecorder(
         private const val SPEED_FACTOR = 10L
         private const val I_FRAME_INTERVAL_SEC = 1
         private const val DRAIN_TIMEOUT_US = 10_000L
+        private const val FINALIZE_TIMEOUT_MS = 3_000L
+        private const val STOP_TIMEOUT_SECONDS = 10L
     }
 }
 

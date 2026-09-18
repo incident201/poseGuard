@@ -19,8 +19,18 @@ jobs:
   release:
     name: Build signed release APK
     runs-on: ubuntu-latest
+    env:
+      VERSION_NAME: ${{ inputs.version_name }}
+      VERSION_CODE: ${{ inputs.version_code }}
 
     steps:
+      - name: Validate version inputs
+        shell: bash
+        run: |
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || exit 1
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ ]] || exit 1
+          (( VERSION_CODE <= 2100000000 )) || exit 1
+
       - name: Checkout Repository
         uses: actions/checkout@v7
 
@@ -65,8 +75,8 @@ jobs:
       - name: Build Offline Release APK
         run: |
           gradle :app:assembleOfflineRelease --no-daemon --stacktrace \
-            -PVERSION_NAME="${{ inputs.version_name }}" \
-            -PVERSION_CODE="${{ inputs.version_code }}"
+            -PVERSION_NAME="$VERSION_NAME" \
+            -PVERSION_CODE="$VERSION_CODE"
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
@@ -75,8 +85,8 @@ jobs:
       - name: Build Online Release APK
         run: |
           gradle :app:assembleOnlineRelease --no-daemon --stacktrace \
-            -PVERSION_NAME="${{ inputs.version_name }}" \
-            -PVERSION_CODE="${{ inputs.version_code }}"
+            -PVERSION_NAME="$VERSION_NAME" \
+            -PVERSION_CODE="$VERSION_CODE"
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
@@ -84,7 +94,7 @@ jobs:
 
       - name: Rename APKs
         run: |
-          TAG="v${{ inputs.version_name }}"
+          TAG="v${VERSION_NAME}"
 
           OFFLINE_ORIGINAL_PATH="app/build/outputs/apk/offline/release/app-offline-release.apk"
           ONLINE_ORIGINAL_PATH="app/build/outputs/apk/online/release/app-online-release.apk"
