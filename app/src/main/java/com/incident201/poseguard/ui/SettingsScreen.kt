@@ -283,7 +283,12 @@ internal fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(localizedString(settings.language, R.string.penalty_for_violation), color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        localizedString(settings.language, R.string.penalty_for_violation),
+                        color = colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             if (settings.penaltiesEnabled) localizedString(settings.language, R.string.on) else localizedString(settings.language, R.string.off),
@@ -350,7 +355,7 @@ internal fun SettingsScreen(
             Spacer(Modifier.height(12.dp))
             Card(colors = CardDefaults.cardColors(containerColor = colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Pose Smoother One Euro Filter", color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                    Text(localizedString(settings.language, R.string.pose_smoother_title), color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
                     FloatSettingField(
                         label = "minCutoff 0.010–5.000",
@@ -400,10 +405,10 @@ internal fun SettingsScreen(
             Spacer(Modifier.height(12.dp))
             Card(colors = CardDefaults.cardColors(containerColor = colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Pose Occlusion Guard Debug", color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                    Text(localizedString(settings.language, R.string.pose_occlusion_guard_title), color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
                     FloatSettingField(
-                        label = "visibility always freeze 0.000–0.050",
+                        label = localizedString(settings.language, R.string.occlusion_visibility_always),
                         value = settings.occlusionFreezeVisibilityAlways,
                         onValueChanged = onOcclusionFreezeVisibilityAlwaysChanged,
                         min = 0f,
@@ -411,7 +416,7 @@ internal fun SettingsScreen(
                         decimals = 4
                     )
                     FloatSettingField(
-                        label = "p10 visibility always freeze 0.000–0.050",
+                        label = localizedString(settings.language, R.string.occlusion_visibility_p10),
                         value = settings.occlusionFreezeVisibilityP10Always,
                         onValueChanged = onOcclusionFreezeVisibilityP10AlwaysChanged,
                         min = 0f,
@@ -419,7 +424,7 @@ internal fun SettingsScreen(
                         decimals = 4
                     )
                     FloatSettingField(
-                        label = "hard visibility 0.000–0.100",
+                        label = localizedString(settings.language, R.string.occlusion_visibility_hard),
                         value = settings.occlusionFreezeVisibilityHard,
                         onValueChanged = onOcclusionFreezeVisibilityHardChanged,
                         min = 0f,
@@ -427,7 +432,7 @@ internal fun SettingsScreen(
                         decimals = 4
                     )
                     FloatSettingField(
-                        label = "soft visibility 0.000–0.200",
+                        label = localizedString(settings.language, R.string.occlusion_visibility_soft),
                         value = settings.occlusionFreezeVisibilitySoft,
                         onValueChanged = onOcclusionFreezeVisibilitySoftChanged,
                         min = 0f,
@@ -435,7 +440,7 @@ internal fun SettingsScreen(
                         decimals = 4
                     )
                     FloatSettingField(
-                        label = "jitter freeze threshold 0.000–0.300",
+                        label = localizedString(settings.language, R.string.occlusion_jitter_threshold),
                         value = settings.occlusionJitterFreezeThreshold,
                         onValueChanged = onOcclusionJitterFreezeThresholdChanged,
                         min = 0f,
@@ -456,7 +461,8 @@ internal fun SettingsScreen(
                     Text(
                         localizedString(settings.language, R.string.record_timelapse_video),
                         color = colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -483,7 +489,8 @@ internal fun SettingsScreen(
                     Text(
                         localizedString(settings.language, R.string.debug_mode),
                         color = colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -858,7 +865,7 @@ private fun IntifaceConnectionCard(
                     Text(localizedString(settings.language, R.string.intiface_websocket_url))
                 }
             )
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -2068,35 +2075,25 @@ internal fun LanguageSelectorCard(
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { onLanguageChanged(AppLanguage.English) }
-                    .padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(selected = language == AppLanguage.English, onClick = { onLanguageChanged(AppLanguage.English) })
-                Text(
-                    localizedString(language, R.string.language_english),
-                    color = colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { onLanguageChanged(AppLanguage.Russian) }
-                    .padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(selected = language == AppLanguage.Russian, onClick = { onLanguageChanged(AppLanguage.Russian) })
-                Text(
-                    localizedString(language, R.string.language_russian),
-                    color = colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
+            AppLanguage.entries.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onLanguageChanged(option) }
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = language == option,
+                        onClick = { onLanguageChanged(option) }
+                    )
+                    Text(
+                        localizedString(language, option.labelRes),
+                        color = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }

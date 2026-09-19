@@ -56,6 +56,12 @@ jobs:
       - name: Run Online Unit Tests
         run: gradle :app:testOnlineDebugUnitTest --no-daemon --stacktrace
 
+      - name: Lint both flavors
+        run: gradle :app:lintOfflineDebug :app:lintOnlineDebug --no-daemon --stacktrace
+
+      - name: Verify release code shrinking without signing secrets
+        run: gradle :app:minifyOfflineReleaseWithR8 :app:minifyOnlineReleaseWithR8 --no-daemon --stacktrace
+
       - name: Build Offline Debug APK
         run: gradle :app:assembleOfflineDebug --no-daemon --stacktrace
 

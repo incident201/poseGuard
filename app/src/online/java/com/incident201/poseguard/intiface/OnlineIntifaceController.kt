@@ -333,9 +333,7 @@ internal class OnlineIntifaceController : IntifaceController {
                 .sortedBy { it.displayName.lowercase() }
             if (!isCurrent(newClient, generation)) return
 
-            val matchedDevice = devices.firstOrNull { it.name == rememberedDevice.name }
-                ?: devices.firstOrNull { it.displayName == rememberedDevice.displayName }
-                ?: devices.firstOrNull { it.index == rememberedDevice.index }
+            val matchedDevice = matchRememberedDevice(devices, rememberedDevice)
 
             if (matchedDevice != null) {
                 mutableState.value = mutableState.value.copy(

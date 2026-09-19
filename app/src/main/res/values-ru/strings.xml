@@ -89,6 +89,10 @@
     <string name="demo">ДЕМО</string>
     <string name="language_english">English</string>
     <string name="language_russian">Русский</string>
+    <string name="language_spanish">Español</string>
+    <string name="language_italian">Italiano</string>
+    <string name="language_german">Deutsch</string>
+    <string name="language_french">Français</string>
     <string name="save_timelapse_title">Сохранить timelapse-видео?</string>
     <string name="save_timelapse_message">Timelapse-видео записано</string>
     <string name="save">Сохранить</string>
@@ -264,4 +268,21 @@
     <string name="intiface_connection_disabled_hint">Включите подключение Intiface Central для соединения с устройством.</string>
     <string name="intiface_rules_disabled_until_enabled">Подключение и правила сессии недоступны, пока Intiface Central выключен.</string>
     <string name="intiface_local_network_permission_required">Для подключения к Intiface Central на Android 17 нужен доступ к локальной сети.</string>
+    <string name="start_countdown">СТАРТ ЧЕРЕЗ %1$d с</string>
+    <string name="pose_debug_saved">JSON с данными позы сохранён</string>
+    <string name="pose_debug_save_failed">Не удалось сохранить JSON с данными позы</string>
+    <string name="pose_debug_no_data">Нет данных позы для сохранения</string>
+    <string name="pose_smoother_title">Сглаживание позы: фильтр One Euro</string>
+    <string name="pose_occlusion_guard_title">Защита от перекрытий: отладка</string>
+    <string name="occlusion_visibility_always">Видимость для постоянной фиксации 0.000–0.050</string>
+    <string name="occlusion_visibility_p10">Видимость для постоянной фиксации (p10) 0.000–0.050</string>
+    <string name="occlusion_visibility_hard">Жёсткий порог видимости 0.000–0.100</string>
+    <string name="occlusion_visibility_soft">Мягкий порог видимости 0.000–0.200</string>
+    <string name="occlusion_jitter_threshold">Порог фиксации при дрожании 0.000–0.300</string>
+    <string name="acceleration_initializing">Инициализация</string>
+    <string name="acceleration_fallback_detail">Откат с GPU: %1$s</string>
+    <string name="acceleration_error">ОШИБКА</string>
+    <string name="seconds_short">%1$d с</string>
+    <string name="session_stopped">Сессия остановлена</string>
+    <string name="face_check_unavailable">Проверка лица недоступна. Сессия остановлена без дополнительного штрафа. Попробуйте ещё раз.</string>
 </resources>

@@ -32,20 +32,22 @@ class FaceDetectorService(
     private val tag = "FaceDetectorService"
     private var faceDetector: FaceDetector? = null
     private var initializationError: String = ""
+    private var closed = false
     private var minDetectionConfidence = initialMinDetectionConfidence.coerceIn(0.5f, 0.95f)
-
-    init { recreateDetector() }
 
     @Synchronized
     fun setMinDetectionConfidence(value: Float) {
         val normalized = value.coerceIn(0.5f, 0.95f)
         if (abs(normalized - minDetectionConfidence) < 0.001f) return
         minDetectionConfidence = normalized
-        recreateDetector()
+        if (!closed && faceDetector != null) recreateDetector()
+        else initializationError = ""
     }
 
     @Synchronized
     fun detectOnCrop(cropBitmap: Bitmap): FaceDetectionOnCrop {
+        if (closed) return FaceDetectionOnCrop(FaceDetectionStatus.Error, errorMessage = "closed")
+        if (faceDetector == null && initializationError.isEmpty()) recreateDetector()
         val detector = faceDetector ?: return FaceDetectionOnCrop(FaceDetectionStatus.Error, errorMessage = "init failed: $initializationError")
         var copiedBitmap: Bitmap? = null
         return try {
@@ -100,6 +102,7 @@ class FaceDetectorService(
 
     @Synchronized
     fun close() {
+        closed = true
         faceDetector?.close()
         faceDetector = null
     }

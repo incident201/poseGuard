@@ -31,6 +31,7 @@ import com.incident201.poseguard.intiface.IntifaceVibrationSettings
 import com.incident201.poseguard.intiface.IntifaceViolationMode
 import com.incident201.poseguard.intiface.createIntifaceController
 import com.incident201.poseguard.tracker.AccelerationMode
+import com.incident201.poseguard.tracker.CameraFrame
 import com.incident201.poseguard.tracker.FaceDetectionStatus
 import com.incident201.poseguard.tracker.FaceCandidateCropper
 import com.incident201.poseguard.tracker.FaceDetectorService
@@ -63,7 +64,6 @@ import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
@@ -95,6 +95,7 @@ private const val PREF_SENSITIVITY_PRESETS_VERSION = "sensitivity_presets_versio
 private const val CURRENT_SENSITIVITY_PRESETS_VERSION = 2
 private const val MAX_POSE_DROPOUT_HOLD_FRAMES = 5
 private const val MAX_POSE_DROPOUT_HOLD_MS = 180L
+private const val FACE_CHECK_UNAVAILABLE_TIMEOUT_MS = 5_000L
 private const val PREF_CUSTOMIZE_AUDIO_ENABLED = "customize_audio_enabled"
 private const val PREF_TTS_VOICE_MODE = "tts_voice_mode"
 private const val PREF_AUDIO_CUE_MODE_PREFIX = "audio_cue_mode_"
@@ -151,7 +152,16 @@ enum class FaceCheckMode {
     Disabled
 }
 
-enum class AppLanguage { Russian, English }
+enum class AppLanguage(val languageTag: String, val labelRes: Int) {
+    English("en-US", R.string.language_english),
+    Russian("ru-RU", R.string.language_russian),
+    Spanish("es-ES", R.string.language_spanish),
+    Italian("it-IT", R.string.language_italian),
+    German("de-DE", R.string.language_german),
+    French("fr-FR", R.string.language_french);
+
+    val locale: Locale get() = Locale.forLanguageTag(languageTag)
+}
 
 internal fun accelerationModeAfterAppUpdate(
     savedMode: AccelerationMode,
@@ -271,7 +281,8 @@ data class SessionSummary(
     val actualTimerSeconds: Int,
     val violationCounts: RuleViolationCounts,
     val settings: GameSettings,
-    val defeatReason: String = ""
+    val defeatReason: String = "",
+    val stoppedByTechnicalError: Boolean = false
 )
 
 class GameViewModel(application: Application) : AndroidViewModel(application), SensorEventListener {
@@ -344,7 +355,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     private var sessionInitialTimerSeconds = defaultDurationSeconds
     @Volatile private var sessionTimerMode = TimerMode.Exact
-    @Volatile private var sessionTargetSeconds = defaultDurationSeconds
+    private val sessionClock = SessionClock()
 
     private enum class PendingTerminalResult {
         Success,
@@ -353,7 +364,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     // Guarded by sessionTargetLock.
     private var pendingTerminalResult: PendingTerminalResult? = null
-    private var sessionHoldingStartedAtElapsedMs: Long? = null
     private var sessionSettingsSnapshot = _gameSettings.value
 
     private data class AnalyzedPoseFrame(
@@ -365,7 +375,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     )
 
     private data class PendingPoseFrame(
-        val bitmap: Bitmap,
+        val frame: CameraFrame,
         val processingGeneration: Long
     )
 
@@ -380,6 +390,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     // When both locks are needed, always acquire processingLock before sessionTargetLock.
     private val sessionTargetLock = Any()
     private var processingGeneration = 0L
+    private var lastProcessedPoseTimestampMs = Long.MIN_VALUE
     private val mediaPipeResultExecutor = Executors.newSingleThreadExecutor()
     @Volatile private var isCleared = false
     private val pendingFrames = LinkedHashMap<Long, PendingPoseFrame>()
@@ -401,13 +412,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     private var currentViolationCount = 0
     private var lastPenaltyAtMs = 0L
     private var consecutiveFaceFailFrames = 0
+    // Guarded by processingLock; both unavailable statuses belong to the same outage.
+    private var faceCheckUnavailableSinceMs: Long? = null
     private val faceFailFramesThreshold = 5
 
     private enum class RuleViolationType { Drift, Motion, PersonDisappeared, FaceNotMatchingMode }
 
 
     private fun tr(resId: Int, vararg args: Any): String {
-        val locale = if (_gameSettings.value.language == AppLanguage.Russian) Locale.forLanguageTag("ru-RU") else Locale.US
+        val locale = _gameSettings.value.language.locale
         val config = android.content.res.Configuration(getApplication<Application>().resources.configuration)
         config.setLocale(locale)
         val res = getApplication<Application>().createConfigurationContext(config).resources
@@ -708,7 +721,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     fun updateFaceCheckMode(mode: FaceCheckMode) {
         _gameSettings.value = _gameSettings.value.copy(faceCheckMode = mode)
         prefs.edit().putString("face_mode", mode.name).apply()
-        synchronized(processingLock) { consecutiveFaceFailFrames = 0 }
+        synchronized(processingLock) {
+            consecutiveFaceFailFrames = 0
+            faceCheckUnavailableSinceMs = null
+        }
     }
 
     fun updateFaceDetectionConfidence(value: Float) {
@@ -716,7 +732,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         _gameSettings.value = _gameSettings.value.copy(faceDetectionConfidence = normalized)
         prefs.edit().putFloat("face_conf", normalized).apply()
         faceDetectorService.setMinDetectionConfidence(normalized)
-        synchronized(processingLock) { consecutiveFaceFailFrames = 0 }
+        synchronized(processingLock) {
+            consecutiveFaceFailFrames = 0
+            faceCheckUnavailableSinceMs = null
+        }
     }
 
     fun updateDriftThresholdFactor(value: Float) {
@@ -871,6 +890,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     fun resolveAccelerationMode(mode: AccelerationMode) {
+        // A delayed status callback must not turn an explicit CPU choice into an
+        // automatically resolved preference that gets reset on the next update.
+        if (_gameSettings.value.accelerationMode == mode) return
         if (mode == AccelerationMode.Gpu &&
             _gameSettings.value.accelerationMode != AccelerationMode.Auto
         ) {
@@ -1345,6 +1367,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             poseSmoother.reset()
             poseOcclusionGuard.reset()
             resetPoseDropoutHoldState()
+            clearCameraFrameCache()
         }
     }
 
@@ -1399,22 +1422,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         updateSelectedDurationSeconds(minutes * 60)
     }
 
-    fun registerCameraFrame(bitmap: Bitmap, timestampMs: Long) {
+    fun registerCameraFrame(frame: CameraFrame, timestampMs: Long) {
+        if (!frame.retain()) return
+        if (isCleared) {
+            frame.close()
+            return
+        }
         val generation = synchronized(processingLock) { processingGeneration }
-        val pendingFrame = PendingPoseFrame(bitmap, generation)
-        val removedBitmaps = mutableListOf<Bitmap>()
+        val pendingFrame = PendingPoseFrame(frame, generation)
+        val removedFrames = mutableListOf<CameraFrame>()
         synchronized(frameLock) {
-            val previous = pendingFrames.put(timestampMs, pendingFrame)
-            if (previous != null && previous.bitmap !== bitmap) {
-                removedBitmaps.add(previous.bitmap)
+            if (isCleared) {
+                frame.close()
+                return
             }
+            val previous = pendingFrames.put(timestampMs, pendingFrame)
+            previous?.let { removedFrames.add(it.frame) }
 
             while (pendingFrames.size > 20) {
                 val oldestTimestamp = pendingFrames.keys.first()
                 val removed = pendingFrames.remove(oldestTimestamp)
-                if (removed != null && removed.bitmap !== bitmap) {
-                    removedBitmaps.add(removed.bitmap)
-                }
+                removed?.let { removedFrames.add(it.frame) }
             }
 
             val minTs = timestampMs - 3000
@@ -1424,27 +1452,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                 if (entry.key < minTs) {
                     val removed = entry.value
                     iterator.remove()
-                    if (removed.bitmap !== bitmap) {
-                        removedBitmaps.add(removed.bitmap)
-                    }
+                    removedFrames.add(removed.frame)
                 }
             }
         }
-        removedBitmaps.forEach { it.recycleIfNeeded() }
+        removedFrames.forEach(CameraFrame::close)
     }
 
-    fun dropCameraFrame(timestampMs: Long, recycle: Boolean) {
+    fun dropCameraFrame(timestampMs: Long) {
         val frame = synchronized(frameLock) { pendingFrames.remove(timestampMs) }
-        if (recycle) frame?.bitmap?.recycleIfNeeded()
+        frame?.frame?.close()
     }
 
-    fun clearCameraFrameCache(recycle: Boolean) {
-        val bitmaps = synchronized(frameLock) {
-            val values = pendingFrames.values.map { it.bitmap }
+    fun clearCameraFrameCache() {
+        val frames = synchronized(frameLock) {
+            val values = pendingFrames.values.map { it.frame }
             pendingFrames.clear()
+            latestAnalyzedFrame = null
             values
         }
-        if (recycle) bitmaps.forEach { it.recycleIfNeeded() }
+        frames.forEach(CameraFrame::close)
     }
 
 
@@ -1485,12 +1512,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     private fun processMediaPipeResultsInternal(rawPose: PoseLandmarks, timestamp: Long, imageWidth: Int, imageHeight: Int) {
         if (isCleared) return
-        val matchedFrame = synchronized(frameLock) { pendingFrames.remove(timestamp) }
-        val matchedBitmap = matchedFrame?.bitmap
+        // Evicted/unregistered results have no generation and cannot be trusted after a reset.
+        val matchedFrame = synchronized(frameLock) { pendingFrames.remove(timestamp) } ?: return
+        val matchedBitmap = matchedFrame.frame.bitmap
         val stabilizedFrame = synchronized(processingLock) {
-            if (matchedFrame != null && matchedFrame.processingGeneration != processingGeneration) {
+            if (matchedFrame.processingGeneration != processingGeneration ||
+                timestamp <= lastProcessedPoseTimestampMs
+            ) {
                 null
             } else {
+                lastProcessedPoseTimestampMs = timestamp
                 val rawPoseMissing = rawPose.allLandmarks.size < 33
                 if (rawPoseMissing) {
                     rawPoseMissingFrames += 1
@@ -1541,23 +1572,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             }
         }
         if (stabilizedFrame == null) {
-            matchedBitmap?.recycleIfNeeded()
+            matchedFrame.frame.close()
             return
         }
         val (frameGeneration, pose, identityDebugText) = stabilizedFrame
         if (isCleared) {
-            matchedBitmap?.recycleIfNeeded()
+            matchedFrame.frame.close()
             return
         }
         Log.v(tag, "MediaPipe frame ts=$timestamp size=${imageWidth}x$imageHeight landmarks=${pose.allLandmarks.size}")
         val nextOverlayState = try {
-            if (matchedBitmap == null) {
-                buildOverlayStateWithoutFace(pose, imageWidth, imageHeight, identityDebugText)
-            } else {
-                buildOverlayState(matchedBitmap, pose, timestamp, identityDebugText)
-            }
+            buildOverlayState(matchedBitmap, pose, timestamp, identityDebugText)
         } finally {
-            matchedBitmap?.recycleIfNeeded()
+            matchedFrame.frame.close()
         }
         synchronized(processingLock) {
             if (processingGeneration != frameGeneration) return
@@ -1570,6 +1597,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                     face = nextOverlayState.face
                 )
             }
+            if (updateFaceCheckAvailability(nextOverlayState.face.status)) return
             val isHoldingPose = _gameState.value == GameState.HoldingPose
             if (!isHoldingPose) {
                 _poseOverlayState.value = nextOverlayState.copy(frozenLandmarkIndices = emptySet())
@@ -1613,6 +1641,49 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         }
     }
 
+    private fun updateFaceCheckAvailability(status: FaceDetectionStatus): Boolean {
+        if (_gameSettings.value.faceCheckMode == FaceCheckMode.Disabled ||
+            _gameState.value != GameState.HoldingPose
+        ) {
+            faceCheckUnavailableSinceMs = null
+            return false
+        }
+        if (stopIfFaceCheckTimedOut()) return true
+        when (status) {
+            FaceDetectionStatus.Error, FaceDetectionStatus.NotProcessed -> {
+                if (faceCheckUnavailableSinceMs == null) {
+                    faceCheckUnavailableSinceMs = SystemClock.elapsedRealtime()
+                    Log.w(tag, "face_check_unavailable status=$status timeoutMs=$FACE_CHECK_UNAVAILABLE_TIMEOUT_MS")
+                }
+            }
+            FaceDetectionStatus.FaceVisible, FaceDetectionStatus.FaceNotVisible -> {
+                faceCheckUnavailableSinceMs?.let {
+                    Log.i(tag, "face_check_recovered elapsedMs=${SystemClock.elapsedRealtime() - it}")
+                }
+                faceCheckUnavailableSinceMs = null
+            }
+        }
+        return stopIfFaceCheckTimedOut()
+    }
+
+    private fun stopIfFaceCheckTimedOut(): Boolean {
+        if (_gameSettings.value.faceCheckMode == FaceCheckMode.Disabled ||
+            _gameState.value != GameState.HoldingPose
+        ) {
+            faceCheckUnavailableSinceMs = null
+            return false
+        }
+        val since = faceCheckUnavailableSinceMs ?: return false
+        if (SystemClock.elapsedRealtime() - since < FACE_CHECK_UNAVAILABLE_TIMEOUT_MS) return false
+        if (!tryReserveSessionDefeat()) return false
+        Log.e(tag, "face_check_timeout elapsedMs=${SystemClock.elapsedRealtime() - since}; session stopped without penalty")
+        completeDefeatAfterReservation(
+            reason = tr(R.string.face_check_unavailable),
+            stoppedByTechnicalError = true
+        )
+        return true
+    }
+
     private fun processFaceRule(status: FaceDetectionStatus, pose: PoseLandmarks) {
         when (_gameSettings.value.faceCheckMode) {
             FaceCheckMode.Disabled -> return
@@ -1638,7 +1709,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     private fun handleRuleViolation(type: RuleViolationType, pose: PoseLandmarks): Boolean {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastPenaltyAtMs > 0L && now - lastPenaltyAtMs < _gameSettings.value.minimumPenaltyIntervalSeconds * 1000L) {
             return false
         }
@@ -1717,11 +1788,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                 if (_gameState.value == GameState.HoldingPose &&
                     pendingTerminalResult == null
                 ) {
-                    if (sessionTimerMode == TimerMode.Random) {
-                        sessionTargetSeconds += sec
-                    } else {
-                        _timerSeconds.value += sec
-                    }
+                    sessionClock.addPenalty(sec)
+                    updateSessionTimerLocked()
                 }
             }
         }
@@ -1775,7 +1843,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         pose: PoseLandmarks,
         timestamp: Long,
         identityDebugText: String
-    ): PoseOverlayState { /* trimmed from old implementation */
+    ): PoseOverlayState {
+        val settings = _gameSettings.value
+        if (settings.faceCheckMode == FaceCheckMode.Disabled && !settings.debugModeEnabled) {
+            return buildOverlayStateWithoutFace(pose, bitmap.width, bitmap.height, identityDebugText)
+        }
         val cropRect = PoseFrameCropper.calculateCropRect(bitmap.width, bitmap.height, pose)
         val faceOverlayState = if (cropRect != null) {
             val faceCandidateRect = FaceCandidateCropper.calculateFaceCandidateRect(bitmap.width, bitmap.height, pose, cropRect)
@@ -1809,7 +1881,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                 } catch (t: Throwable) {
                     Log.e(tag, "Failed to prepare face crop", t)
                     FaceOverlayState(status = FaceDetectionStatus.Error, debugMessage = "face=Error input=0x0")
-                } finally { faceCropBitmap?.recycleIfNeeded() }
+                } finally {
+                    if (faceCropBitmap !== bitmap) faceCropBitmap?.recycleIfNeeded()
+                }
             }
         } else FaceOverlayState(status = FaceDetectionStatus.NotProcessed, debugMessage = "face=NotProcessed no body crop")
 
@@ -1839,7 +1913,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         }
         val faceOverlayState = FaceOverlayState(
             status = FaceDetectionStatus.NotProcessed,
-            debugMessage = "face=NotProcessed no matched bitmap"
+            debugMessage = "face=NotProcessed disabled"
         )
         return PoseOverlayState(safeWidth, safeHeight, pose.allLandmarks, normalizedRect, faceOverlayState, identityDebugText = identityDebugText)
     }
@@ -1906,23 +1980,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     private fun sessionElapsedSecondsForSummary(): Int {
-        val startedAt = sessionHoldingStartedAtElapsedMs ?: return 0
-        val elapsedSeconds = ((SystemClock.elapsedRealtime() - startedAt) / 1000L)
-            .coerceAtLeast(0L)
-        return elapsedSeconds.toInt()
+        return synchronized(sessionTargetLock) {
+            sessionClock.snapshot(SystemClock.elapsedRealtime()).elapsedSeconds
+        }
     }
 
-    private fun tryReserveSessionSuccess(elapsedSeconds: Int? = null): Boolean = synchronized(sessionTargetLock) {
+    private fun tryReserveSessionSuccess(): Boolean = synchronized(sessionTargetLock) {
         if (_gameState.value != GameState.HoldingPose ||
             pendingTerminalResult != null
         ) {
             return@synchronized false
         }
 
-        val canComplete = when (sessionTimerMode) {
-            TimerMode.Random -> elapsedSeconds != null && elapsedSeconds >= sessionTargetSeconds
-            TimerMode.Exact -> true
-        }
+        // If time expires during a brief outage, wait for recovery or the outage timeout.
+        // Do not award success for a face rule that cannot currently be evaluated.
+        val canComplete = updateSessionTimerLocked() && faceCheckUnavailableSinceMs == null
 
         if (canComplete) {
             pendingTerminalResult = PendingTerminalResult.Success
@@ -1947,14 +2019,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         }
     }
 
-    private fun completeSessionSuccess() {
+    private fun completeSessionSuccess() = synchronized(processingLock) {
         val canComplete = synchronized(sessionTargetLock) {
             pendingTerminalResult == PendingTerminalResult.Success &&
                 _gameState.value == GameState.HoldingPose
         }
 
         if (!canComplete) {
-            return
+            return@synchronized
         }
 
         _sessionSummary.value = SessionSummary(
@@ -1965,45 +2037,56 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             settings = sessionSettingsSnapshot
         )
         _gameState.value = GameState.Success
+        faceCheckUnavailableSinceMs = null
         stopIntifaceSessionSignals()
         resetMovementGaugeState()
         _statusMessage.value = tr(R.string.victory)
         playAudioCue(AudioCue.TimeIsUp, ttsText(TtsPhraseTemplate.TimeIsUp))
     }
 
+    private fun updateSessionTimerLocked(): Boolean {
+        val snapshot = sessionClock.snapshot(SystemClock.elapsedRealtime())
+        _timerSeconds.value = if (sessionTimerMode == TimerMode.Random) {
+            snapshot.elapsedSeconds
+        } else {
+            snapshot.remainingSeconds
+        }
+        return snapshot.finished
+    }
+
     private fun startTimerLoop() {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
-            if (sessionTimerMode == TimerMode.Random) {
-                while (_gameState.value == GameState.HoldingPose) {
-                    val elapsedSeconds = sessionElapsedSecondsForSummary()
-                    _timerSeconds.value = elapsedSeconds
-                    val shouldComplete = tryReserveSessionSuccess(elapsedSeconds)
-                    if (shouldComplete) {
-                        completeSessionSuccess()
-                        return@launch
-                    }
-
-                    delay(250)
-                }
-                return@launch
-            }
-
-            while (_gameState.value == GameState.HoldingPose && _timerSeconds.value > 0) {
-                delay(1000)
-                if (_gameState.value != GameState.HoldingPose) return@launch
-                _timerSeconds.value = (_timerSeconds.value - 1).coerceAtLeast(0)
-            }
-
-            if (_timerSeconds.value <= 0 && tryReserveSessionSuccess()) {
-                completeSessionSuccess()
-                return@launch
+            while (_gameState.value == GameState.HoldingPose) {
+                checkSessionProgress()
+                delay(250)
             }
         }
     }
 
-    fun startSession() {
-        if (_gameState.value != GameState.Idle && _gameState.value != GameState.Failed && _gameState.value != GameState.Success) return
+    private fun checkSessionProgress() = synchronized(processingLock) {
+        if (_gameState.value != GameState.HoldingPose) return@synchronized
+        if (stopIfFaceCheckTimedOut()) return@synchronized
+        // A stalled camera/delegate must not award success without pose validation.
+        val lastFrame = synchronized(frameLock) { latestAnalyzedFrame }
+        if (lastFrame == null || SystemClock.elapsedRealtime() - lastFrame.timestampMs > 5_000L) {
+            triggerDefeat(tr(R.string.camera_no_frame))
+            return@synchronized
+        }
+        if (tryReserveSessionSuccess()) completeSessionSuccess()
+    }
+
+    fun onCameraUnavailable() {
+        when (_gameState.value) {
+            GameState.StartingDelay, GameState.HoldingPose -> triggerDefeat(tr(R.string.camera_no_frame))
+            GameState.WaitingForStabilization -> stopSession()
+            else -> Unit
+        }
+        pauseIntifaceSessionSignals()
+    }
+
+    fun startSession() = synchronized(processingLock) {
+        if (_gameState.value != GameState.Idle && _gameState.value != GameState.Failed && _gameState.value != GameState.Success) return@synchronized
 
         _sessionSummary.value = null
         sessionTimerMode = _timerMode.value
@@ -2014,7 +2097,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         } else {
             _selectedDurationSeconds.value
         }
-        sessionHoldingStartedAtElapsedMs = null
         sessionSettingsSnapshot = _gameSettings.value
         _timerSeconds.value = if (sessionTimerMode == TimerMode.Exact) sessionInitialTimerSeconds else 0
         _defeatReason.value = ""
@@ -2032,8 +2114,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             resetRuleViolationCounts()
             lastPenaltyAtMs = 0L
             consecutiveFaceFailFrames = 0
+            faceCheckUnavailableSinceMs = null
             synchronized(sessionTargetLock) {
-                sessionTargetSeconds = sessionInitialTimerSeconds
+                sessionClock.reset(sessionInitialTimerSeconds)
                 pendingTerminalResult = null
             }
         }
@@ -2082,7 +2165,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             if (analyzedFrame == null) { triggerDefeat(tr(R.string.camera_no_frame)); return@launch }
             if (initialPose == null || !initialPose.hasEnoughKeypoints()) { triggerDefeat(tr(R.string.camera_no_body)); return@launch }
             _timerSeconds.value = if (sessionTimerMode == TimerMode.Exact) sessionInitialTimerSeconds else 0
-            sessionHoldingStartedAtElapsedMs = SystemClock.elapsedRealtime()
+            synchronized(sessionTargetLock) {
+                sessionClock.start(SystemClock.elapsedRealtime())
+            }
             synchronized(processingLock) {
                 processingGeneration += 1
                 movementTracker.reset()
@@ -2097,8 +2182,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                 )
                 val guardedInitialPose = poseOcclusionGuard.buildReferencePose(initialPose)
                 movementTracker.startTracking(guardedInitialPose)
+                _gameState.value = GameState.HoldingPose
+                updateFaceCheckAvailability(analyzedFrame.face.status)
             }
-            _gameState.value = GameState.HoldingPose
             _statusMessage.value = tr(R.string.time_started_hold_position)
             startTimerLoop()
             startIntifaceSessionSignals()
@@ -2157,7 +2243,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     private fun completeDefeatAfterReservation(
         reason: String,
-        preserveIntifaceOverride: Boolean = false
+        preserveIntifaceOverride: Boolean = false,
+        stoppedByTechnicalError: Boolean = false
     ) {
         if (preserveIntifaceOverride) {
             intifaceBackgroundJob?.cancel()
@@ -2176,6 +2263,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         _startDelayRemainingSeconds.value = 0
         synchronized(processingLock) {
             processingGeneration += 1
+            faceCheckUnavailableSinceMs = null
             poseIdentityStabilizer.reset()
             poseSmoother.reset()
             movementTracker.reset()
@@ -2189,12 +2277,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             actualTimerSeconds = sessionElapsedSecondsForSummary(),
             violationCounts = _ruleViolationCounts.value,
             settings = sessionSettingsSnapshot,
-            defeatReason = reason
+            defeatReason = reason,
+            stoppedByTechnicalError = stoppedByTechnicalError
         )
         _gameState.value = GameState.Failed
         _defeatReason.value = reason
-        _statusMessage.value = tr(R.string.check_failed)
-        playAudioCue(AudioCue.DefeatTryAgain, ttsText(TtsPhraseTemplate.DefeatTryAgain))
+        _statusMessage.value = tr(if (stoppedByTechnicalError) R.string.session_stopped else R.string.check_failed)
+        if (!stoppedByTechnicalError) {
+            playAudioCue(AudioCue.DefeatTryAgain, ttsText(TtsPhraseTemplate.DefeatTryAgain))
+        }
     }
 
     private fun defaultTtsTemplateText(template: TtsPhraseTemplate): String = when (template) {
@@ -2223,43 +2314,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         _audioCueEvents.tryEmit(AudioCueEvent(cue, ttsText))
     }
 
-    fun dismissFinalScreen() {
-        if (_gameState.value != GameState.Success && _gameState.value != GameState.Failed) return
-        startDelayJob?.cancel()
-        timerJob?.cancel()
-        stabilizationFallbackJob?.cancel()
-        stabilizationFallbackJob = null
-        sensorManager.unregisterListener(this)
-        stabilizationStableSinceMs = null
-        stabilizationCompleted = false
-        _startDelayRemainingSeconds.value = 0
-        synchronized(processingLock) {
-            processingGeneration += 1
-            poseIdentityStabilizer.reset()
-            poseSmoother.reset()
-            movementTracker.reset()
-            poseOcclusionGuard.reset()
-            resetPoseDropoutHoldState()
-            currentViolationCount = 0
-            _violationCount.value = 0
-            resetRuleViolationCounts()
-            lastPenaltyAtMs = 0L
-            consecutiveFaceFailFrames = 0
+    fun dismissFinalScreen() = synchronized(processingLock) {
+        if (_gameState.value == GameState.Success || _gameState.value == GameState.Failed) {
+            stopSession()
         }
-        synchronized(sessionTargetLock) {
-            pendingTerminalResult = null
-        }
-        _sessionSummary.value = null
-        resetMovementGaugeState()
-        sessionHoldingStartedAtElapsedMs = null
-        _gameState.value = GameState.Idle
-        _statusMessage.value = tr(R.string.status_initial)
-        _defeatReason.value = ""
-        _timerSeconds.value = if (_timerMode.value == TimerMode.Exact) _selectedDurationSeconds.value else 0
-        stopIntifaceSessionSignals()
     }
 
-    fun stopSession() {
+    fun stopSession() = synchronized(processingLock) {
+        faceCheckUnavailableSinceMs = null
         startDelayJob?.cancel()
         timerJob?.cancel()
         stabilizationFallbackJob?.cancel()
@@ -2286,7 +2348,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         }
         _sessionSummary.value = null
         resetMovementGaugeState()
-        sessionHoldingStartedAtElapsedMs = null
         _gameState.value = GameState.Idle
         _statusMessage.value = tr(R.string.status_initial)
         _defeatReason.value = ""
@@ -2306,6 +2367,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         stabilizationCompleted = false
         synchronized(processingLock) {
             processingGeneration += 1
+            faceCheckUnavailableSinceMs = null
             poseIdentityStabilizer.reset()
             poseSmoother.reset()
             movementTracker.reset()
@@ -2315,10 +2377,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         synchronized(sessionTargetLock) {
             pendingTerminalResult = null
         }
-        clearCameraFrameCache(recycle = true)
-        mediaPipeResultExecutor.shutdownNow()
-        runCatching { mediaPipeResultExecutor.awaitTermination(200, TimeUnit.MILLISECONDS) }
-        faceDetectorService.close()
+        clearCameraFrameCache()
+        // A native face call may still be running. Close on its owner executor rather
+        // than blocking the UI waiting for the detector's synchronized native call.
+        mediaPipeResultExecutor.execute {
+            runCatching { faceDetectorService.close() }
+                .onFailure { Log.w(tag, "Failed to close face detector", it) }
+        }
+        mediaPipeResultExecutor.shutdown()
         super.onCleared()
     }
 }

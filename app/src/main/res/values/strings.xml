@@ -89,6 +89,10 @@
     <string name="demo">DEMO</string>
     <string name="language_english">English</string>
     <string name="language_russian">Русский</string>
+    <string name="language_spanish">Español</string>
+    <string name="language_italian">Italiano</string>
+    <string name="language_german">Deutsch</string>
+    <string name="language_french">Français</string>
     <string name="save_timelapse_title">Save timelapse video?</string>
     <string name="save_timelapse_message">Timelapse video was recorded</string>
     <string name="save">Save</string>
@@ -264,4 +268,21 @@
     <string name="intiface_connection_disabled_hint">Enable Intiface Central Connection to connect a device.</string>
     <string name="intiface_rules_disabled_until_enabled">Connection and session rules are disabled until Intiface Central Connection is enabled.</string>
     <string name="intiface_local_network_permission_required">Local network permission is required to connect to Intiface Central on Android 17.</string>
+    <string name="start_countdown">START IN %1$d s</string>
+    <string name="pose_debug_saved">Pose debug JSON saved</string>
+    <string name="pose_debug_save_failed">Failed to save pose debug JSON</string>
+    <string name="pose_debug_no_data">No pose data to save</string>
+    <string name="pose_smoother_title">Pose smoothing: One Euro Filter</string>
+    <string name="pose_occlusion_guard_title">Occlusion protection: debug settings</string>
+    <string name="occlusion_visibility_always">Always-freeze visibility 0.000–0.050</string>
+    <string name="occlusion_visibility_p10">Always-freeze visibility (p10) 0.000–0.050</string>
+    <string name="occlusion_visibility_hard">Hard visibility threshold 0.000–0.100</string>
+    <string name="occlusion_visibility_soft">Soft visibility threshold 0.000–0.200</string>
+    <string name="occlusion_jitter_threshold">Jitter freeze threshold 0.000–0.300</string>
+    <string name="acceleration_initializing">Initializing</string>
+    <string name="acceleration_fallback_detail">GPU fallback: %1$s</string>
+    <string name="acceleration_error">ERROR</string>
+    <string name="seconds_short">%1$d s</string>
+    <string name="session_stopped">Session stopped</string>
+    <string name="face_check_unavailable">Face detection is unavailable. The session was stopped without an additional penalty. Please try again.</string>
 </resources>

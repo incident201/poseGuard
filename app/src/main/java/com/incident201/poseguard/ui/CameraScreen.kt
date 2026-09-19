@@ -118,7 +118,7 @@ private const val DEMO_FRAME_DELAY_MS = 40L
 private enum class TimelapseUiState { Preparing, Ready, Saving, Saved, Unavailable, Disabled }
 
 private fun localeFor(language: AppLanguage): Locale =
-    if (language == AppLanguage.Russian) Locale.forLanguageTag("ru-RU") else Locale.US
+    language.locale
 
 private val POSE_CONNECTIONS = listOf(
     11 to 12,
@@ -154,7 +154,7 @@ private val POSE_CONNECTIONS = listOf(
 internal fun localizedString(language: AppLanguage, @StringRes id: Int): String {
     val context = LocalContext.current
     val locale = localeFor(language)
-    val config = android.content.res.Configuration(context.resources.configuration)
+    val config = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current)
     config.setLocale(locale)
     return context.createConfigurationContext(config).resources.getString(id)
 }
@@ -167,7 +167,7 @@ internal fun localizedFormatString(
 ): String {
     val context = LocalContext.current
     val locale = localeFor(language)
-    val config = android.content.res.Configuration(context.resources.configuration)
+    val config = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current)
     config.setLocale(locale)
     return context.createConfigurationContext(config).resources.getString(id, *args)
 }
@@ -243,7 +243,7 @@ fun CameraScreen(
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                viewModel.pauseIntifaceSessionSignals()
+                viewModel.onCameraUnavailable()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -264,6 +264,9 @@ fun CameraScreen(
     var pendingTimelapseFile by remember { mutableStateOf<File?>(null) }
     var timelapseUiState by remember { mutableStateOf(TimelapseUiState.Disabled) }
     var pendingPoseDebugJson by remember { mutableStateOf<String?>(null) }
+    val poseDebugSavedText = localizedString(gameSettings.language, R.string.pose_debug_saved)
+    val poseDebugSaveFailedText = localizedString(gameSettings.language, R.string.pose_debug_save_failed)
+    val poseDebugNoDataText = localizedString(gameSettings.language, R.string.pose_debug_no_data)
     val poseDebugSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
@@ -274,7 +277,7 @@ fun CameraScreen(
             val saved = withContext(Dispatchers.IO) { savePoseDebugJson(context, uri, json) }
             Toast.makeText(
                 context,
-                if (saved) "Pose debug JSON saved" else "Failed to save pose debug JSON",
+                if (saved) poseDebugSavedText else poseDebugSaveFailedText,
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -469,12 +472,14 @@ fun CameraScreen(
     // MediaPipe Setup
     val cameraExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val lastPoseTimestampMs = remember { AtomicLong(0L) }
+    val cameraBindingGeneration = remember { AtomicLong(0L) }
     var imageAnalysisRef by remember { mutableStateOf<ImageAnalysis?>(null) }
     var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var boundLensFacing by remember { mutableStateOf<Int?>(null) }
     var availableLensFacings by remember { mutableStateOf<List<Int>>(emptyList()) }
     var selectedLensFacing by rememberSaveable { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
     var landmarkerService by remember { mutableStateOf<PoseLandmarkerService?>(null) }
+    val landmarkerGeneration = remember { AtomicLong(0L) }
     var landmarkerAccelerationState by remember {
         mutableStateOf<AccelerationState>(AccelerationState.InitializingCpu)
     }
@@ -501,6 +506,7 @@ fun CameraScreen(
     }
 
     LaunchedEffect(context, gameSettings.poseLandmarkerModel) {
+        val generation = landmarkerGeneration.incrementAndGet()
         val previousService = landmarkerService
         landmarkerService = null
         previousService?.close()
@@ -515,15 +521,17 @@ fun CameraScreen(
             }
 
             override fun onResults(result: com.incident201.poseguard.tracker.PoseLandmarks, imageWidth: Int, imageHeight: Int, timestampMs: Long) {
+                if (landmarkerGeneration.get() != generation) return
                 viewModel.processMediaPipeResults(result, timestampMs, imageWidth, imageHeight)
             }
 
             override fun onFrameDropped(timestampMs: Long) {
-                viewModel.dropCameraFrame(timestampMs, recycle = true)
+                viewModel.dropCameraFrame(timestampMs)
             }
 
             override fun onAccelerationStateChanged(state: AccelerationState) {
                 ContextCompat.getMainExecutor(context).execute {
+                    if (landmarkerGeneration.get() != generation) return@execute
                     landmarkerAccelerationState = state
                     when (state) {
                         AccelerationState.Gpu ->
@@ -544,6 +552,8 @@ fun CameraScreen(
     // Clean up
     DisposableEffect(Unit) {
         onDispose {
+            landmarkerGeneration.incrementAndGet()
+            cameraBindingGeneration.incrementAndGet()
             imageAnalysisRef?.clearAnalyzer()
             imageAnalysisRef = null
             runCatching { cameraProviderRef?.unbindAll() }
@@ -552,7 +562,7 @@ fun CameraScreen(
             boundLensFacing = null
             landmarkerService?.close()
             landmarkerService = null
-            viewModel.clearCameraFrameCache(recycle = true)
+            viewModel.clearCameraFrameCache()
             cameraExecutor.shutdown()
             demoBitmap?.recycleIfNeeded()
             demoBitmap = null
@@ -651,7 +661,9 @@ fun CameraScreen(
     }
 
     fun bindCamera(previewView: PreviewView, requestedLensFacing: Int) {
+        val bindingGeneration = cameraBindingGeneration.incrementAndGet()
         fun bindWithProvider(cameraProvider: ProcessCameraProvider) {
+            if (cameraBindingGeneration.get() != bindingGeneration) return
             cameraProviderRef = cameraProvider
 
             val backCameraAvailable = runCatching {
@@ -933,12 +945,11 @@ fun CameraScreen(
                             }
                         },
                         onRelease = { previewView ->
+                            cameraBindingGeneration.incrementAndGet()
                             imageAnalysisRef?.clearAnalyzer()
                             imageAnalysisRef = null
                             runCatching {
-                                val provider = cameraProviderRef
-                                    ?: ProcessCameraProvider.getInstance(previewView.context).get()
-                                provider.unbindAll()
+                                cameraProviderRef?.unbindAll()
                             }.onFailure {
                                 Log.w("CameraScreen", "Failed to unbind camera on release", it)
                             }
@@ -970,7 +981,7 @@ fun CameraScreen(
                     onClick = {
                         val json = viewModel.buildPoseDebugSnapshotJson()
                         if (json == null) {
-                            Toast.makeText(context, "No pose data to save", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, poseDebugNoDataText, Toast.LENGTH_SHORT).show()
                         } else {
                             pendingPoseDebugJson = json
                             poseDebugSaveLauncher.launch(poseDebugFileName())
@@ -987,6 +998,7 @@ fun CameraScreen(
                 AccelerationDebugIndicator(
                     state = landmarkerAccelerationState,
                     mode = gameSettings.accelerationMode,
+                    language = gameSettings.language,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 10.dp)
@@ -1058,6 +1070,7 @@ fun CameraScreen(
         BottomHUDEngine(
             language = gameSettings.language,
             gameState = gameState,
+            stoppedByTechnicalError = sessionSummary?.stoppedByTechnicalError == true,
             statusMessage = statusMessage,
             defeatReason = defeatReason,
             timerSeconds = timerSeconds,
@@ -1094,19 +1107,24 @@ fun CameraScreen(
 private fun AccelerationDebugIndicator(
     state: AccelerationState,
     mode: AccelerationMode,
+    language: AppLanguage,
     modifier: Modifier = Modifier
 ) {
     val (label, detail) = when (state) {
-        AccelerationState.InitializingCpu -> "CPU…" to "initializing"
+        AccelerationState.InitializingCpu -> "CPU…" to localizedString(language, R.string.acceleration_initializing)
         AccelerationState.Cpu -> "CPU" to null
         is AccelerationState.InitializingGpu -> {
             val elapsedSeconds = state.elapsedMs / 1000L
             val label = if (mode == AccelerationMode.Gpu) "GPU…" else "CPU → GPU…"
-            label to if (elapsedSeconds > 0L) "${elapsedSeconds}s" else "initializing"
+            label to if (elapsedSeconds > 0L) {
+                localizedFormatString(language, R.string.seconds_short, elapsedSeconds)
+            } else {
+                localizedString(language, R.string.acceleration_initializing)
+            }
         }
         AccelerationState.Gpu -> "GPU" to null
-        is AccelerationState.CpuFallback -> "CPU" to "GPU fallback: ${state.reason}"
-        is AccelerationState.Error -> "ERROR" to state.reason
+        is AccelerationState.CpuFallback -> "CPU" to localizedFormatString(language, R.string.acceleration_fallback_detail, state.reason)
+        is AccelerationState.Error -> localizedString(language, R.string.acceleration_error) to state.reason
     }
 
     Surface(
@@ -1237,7 +1255,11 @@ private fun FinalSessionScreen(
     val titleColor = if (isSuccess) colorScheme.tertiary else colorScheme.error
     val title = localizedString(
         language,
-        if (isSuccess) R.string.final_completed else R.string.final_failed
+        when {
+            summary.stoppedByTechnicalError -> R.string.session_stopped
+            isSuccess -> R.string.final_completed
+            else -> R.string.final_failed
+        }
     )
     val faceDirectionLabel = faceDirectionLabelFor(summary.settings.faceCheckMode)
 
@@ -1887,6 +1909,7 @@ private fun AudioCueAnnouncer(viewModel: GameViewModel, settings: GameSettings) 
 fun BottomHUDEngine(
     language: AppLanguage,
     gameState: GameState,
+    stoppedByTechnicalError: Boolean = false,
     statusMessage: String,
     defeatReason: String,
     timerSeconds: Int,
@@ -2171,10 +2194,13 @@ fun BottomHUDEngine(
                     val stateHeadline = when (gameState) {
                         GameState.Idle -> localizedString(language, R.string.waiting_to_start)
                         GameState.WaitingForStabilization -> localizedString(language, R.string.device_stabilization)
-                        GameState.StartingDelay -> "${localizedString(language, R.string.start_in)} ${startDelayRemainingSeconds}s"
+                        GameState.StartingDelay -> localizedFormatString(language, R.string.start_countdown, startDelayRemainingSeconds)
                         GameState.HoldingPose -> localizedString(language, R.string.holding_pose)
                         GameState.Success -> localizedString(language, R.string.congrats_victory)
-                        GameState.Failed -> localizedString(language, R.string.failed)
+                        GameState.Failed -> localizedString(
+                            language,
+                            if (stoppedByTechnicalError) R.string.session_stopped else R.string.failed
+                        )
                     }
                     val headlineColor = when (gameState) {
                         GameState.Success -> colorScheme.tertiary
@@ -2188,7 +2214,7 @@ fun BottomHUDEngine(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp,
-                        maxLines = 1
+                        maxLines = 2
                     )
                     Text(
                         text = statusMessage,
@@ -2581,10 +2607,10 @@ private fun submitFrameToPosePipeline(
     landmarkerService: PoseLandmarkerService?,
     timestampMs: Long
 ) {
-    viewModel.registerCameraFrame(bitmap, timestampMs)
-    val accepted = landmarkerService?.detectLiveStreamFrame(bitmap, timestampMs) ?: false
-    if (!accepted) {
-        viewModel.dropCameraFrame(timestampMs, recycle = true)
+    com.incident201.poseguard.tracker.CameraFrame(bitmap).use { frame ->
+        viewModel.registerCameraFrame(frame, timestampMs)
+        val accepted = landmarkerService?.detectLiveStreamFrame(frame, timestampMs) ?: false
+        if (!accepted) viewModel.dropCameraFrame(timestampMs)
     }
 }
 
