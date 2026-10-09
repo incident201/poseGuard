@@ -181,7 +181,7 @@ internal fun SettingsScreen(
             )
         }
         Spacer(Modifier.height(12.dp))
-        LanguageSelectorCard(
+        LanguageSettingCard(
             language = settings.language,
             onLanguageChanged = onLanguageChanged,
             colorScheme = colorScheme
@@ -2063,6 +2063,35 @@ internal fun motionSensitivityPresetFor(thresholdFactor: Float): MotionSensitivi
 }
 
 internal fun Float.nearlyEquals(other: Float): Boolean = kotlin.math.abs(this - other) < 0.001f
+
+@Composable
+private fun LanguageSettingCard(
+    language: AppLanguage,
+    onLanguageChanged: (AppLanguage) -> Unit,
+    colorScheme: ColorScheme
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(colors = CardDefaults.cardColors(containerColor = colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                localizedString(language, R.string.language),
+                color = colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(8.dp))
+            EnumSettingField(
+                label = localizedString(language, R.string.language),
+                value = localizedString(language, language.labelRes),
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+                options = AppLanguage.entries.map { option ->
+                    localizedString(language, option.labelRes) to { onLanguageChanged(option) }
+                }
+            )
+        }
+    }
+}
 
 @Composable
 internal fun LanguageSelectorCard(
