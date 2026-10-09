@@ -23,8 +23,11 @@
              MediaPipe GPU initialization; the delegate then uses its working GL/ICD path. -->
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
 
+        <!-- Recreating the activity would stop the camera and end an active session as a defeat.
+             Compose and CameraX follow these configuration changes in place. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation|locale|layoutDirection|fontScale|fontWeightAdjustment"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.MyApplication">

@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -60,10 +61,10 @@ internal class OnlineIntifaceController : IntifaceController {
             if (mutableState.value.operation == IntifaceOperation.Connecting ||
                 mutableState.value.operation == IntifaceOperation.Scanning
             ) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isScanning = false
-                )
+                ) }
             }
             searchDevicesMutex.unlock()
         }
@@ -80,10 +81,10 @@ internal class OnlineIntifaceController : IntifaceController {
             if (mutableState.value.operation == IntifaceOperation.Connecting ||
                 mutableState.value.operation == IntifaceOperation.Scanning
             ) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isScanning = false
-                )
+                ) }
             }
             searchDevicesMutex.unlock()
         }
@@ -172,7 +173,7 @@ internal class OnlineIntifaceController : IntifaceController {
 
             if (clientToDisconnect != null) {
                 launchPendingClientDisconnect(clientToDisconnect)
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isConnected = false,
                     isScanning = false,
@@ -180,7 +181,7 @@ internal class OnlineIntifaceController : IntifaceController {
                     selectedDevice = null,
                     statusMessage = null,
                     errorMessage = error.toConnectionErrorMessage()
-                )
+                ) }
             }
 
             return null
@@ -206,41 +207,41 @@ internal class OnlineIntifaceController : IntifaceController {
     }
 
     private suspend fun runSearchDevicesLocked(url: String) {
-        mutableState.value = mutableState.value.copy(
+        mutableState.update { it.copy(
             operation = IntifaceOperation.Scanning,
             isScanning = true,
             statusMessage = IntifaceUiMessage(IntifaceMessage.Scanning),
             errorMessage = null
-        )
+        ) }
         val pair = ensureClientConnected(url, forceNewConnection = true)
         if (pair == null) {
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 operation = IntifaceOperation.Idle,
                 isScanning = false,
                 statusMessage = null
-            )
+            ) }
             return
         }
         val newClient = pair.first
         val generation = pair.second
 
         try {
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 operation = IntifaceOperation.Scanning,
                 isConnected = true,
                 isScanning = true,
                 statusMessage = IntifaceUiMessage(IntifaceMessage.Scanning),
                 errorMessage = null
-            )
+            ) }
             val scanStarted = newClient.startScanning()
             if (!scanStarted) {
                 if (isCurrent(newClient, generation)) {
-                    mutableState.value = mutableState.value.copy(
+                    mutableState.update { it.copy(
                         operation = IntifaceOperation.Idle,
                         isScanning = false,
                         statusMessage = null,
                         errorMessage = IntifaceUiMessage(IntifaceMessage.ScanRejected)
-                    )
+                    ) }
                 }
                 return
             }
@@ -255,12 +256,12 @@ internal class OnlineIntifaceController : IntifaceController {
                 .sortedBy { it.displayName.lowercase() }
             if (!isCurrent(newClient, generation)) return
 
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 operation = IntifaceOperation.Idle,
                 isConnected = newClient.isConnected(),
                 isScanning = false,
                 devices = devices,
-                selectedDevice = mutableState.value.selectedDevice
+                selectedDevice = it.selectedDevice
                     ?.takeIf { selected -> devices.any { it.index == selected.index } },
                 statusMessage = if (devices.isEmpty()) {
                     IntifaceUiMessage(IntifaceMessage.NoVibrateDevices)
@@ -270,7 +271,7 @@ internal class OnlineIntifaceController : IntifaceController {
                         listOf(devices.size.toString())
                     )
                 }
-            )
+            ) }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
@@ -284,7 +285,7 @@ internal class OnlineIntifaceController : IntifaceController {
             }
             if (clientToDisconnect != null) {
                 launchPendingClientDisconnect(clientToDisconnect)
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isConnected = false,
                     isScanning = false,
@@ -292,7 +293,7 @@ internal class OnlineIntifaceController : IntifaceController {
                     selectedDevice = null,
                     statusMessage = null,
                     errorMessage = error.toConnectionErrorMessage()
-                )
+                ) }
             }
         }
     }
@@ -303,22 +304,22 @@ internal class OnlineIntifaceController : IntifaceController {
         val generation = pair.second
 
         try {
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 operation = IntifaceOperation.Scanning,
                 isConnected = true,
                 isScanning = true,
                 statusMessage = IntifaceUiMessage(IntifaceMessage.Scanning),
                 errorMessage = null
-            )
+            ) }
             val scanStarted = newClient.startScanning()
             if (!scanStarted) {
                 if (isCurrent(newClient, generation)) {
-                    mutableState.value = mutableState.value.copy(
+                    mutableState.update { it.copy(
                         operation = IntifaceOperation.Idle,
                         isScanning = false,
                         statusMessage = null,
                         errorMessage = IntifaceUiMessage(IntifaceMessage.ScanRejected)
-                    )
+                    ) }
                 }
                 return
             }
@@ -336,7 +337,7 @@ internal class OnlineIntifaceController : IntifaceController {
             val matchedDevice = matchRememberedDevice(devices, rememberedDevice)
 
             if (matchedDevice != null) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isConnected = newClient.isConnected(),
                     isScanning = false,
@@ -346,9 +347,9 @@ internal class OnlineIntifaceController : IntifaceController {
                         IntifaceMessage.SelectedDevice,
                         listOf(matchedDevice.displayName)
                     )
-                )
+                ) }
             } else {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isConnected = newClient.isConnected(),
                     isScanning = false,
@@ -356,7 +357,7 @@ internal class OnlineIntifaceController : IntifaceController {
                     selectedDevice = null,
                     statusMessage = null,
                     errorMessage = IntifaceUiMessage(IntifaceMessage.SavedDeviceNotFound)
-                )
+                ) }
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -371,7 +372,7 @@ internal class OnlineIntifaceController : IntifaceController {
             }
             if (clientToDisconnect != null) {
                 launchPendingClientDisconnect(clientToDisconnect)
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isConnected = false,
                     isScanning = false,
@@ -379,7 +380,7 @@ internal class OnlineIntifaceController : IntifaceController {
                     selectedDevice = null,
                     statusMessage = null,
                     errorMessage = error.toConnectionErrorMessage()
-                )
+                ) }
             }
         }
     }
@@ -407,20 +408,46 @@ internal class OnlineIntifaceController : IntifaceController {
     }
 
     private fun runSessionVibrationCommand(strength: Double, stopDevice: Boolean) {
+        var droppedClient: ButtplugClientWSClient? = null
         val session = synchronized(clientLock) {
             val c = client
             if (c != null && c.isConnected()) {
                 c to operationGeneration.get()
             } else {
+                if (c != null) {
+                    // The server connection dropped; stop reporting a live connection to session logic.
+                    operationGeneration.incrementAndGet()
+                    connectedUri = null
+                    client = null
+                    droppedClient = c
+                }
                 null
             }
-        } ?: return
+        }
+        if (session == null) {
+            droppedClient?.let { lost ->
+                mutableState.update {
+                    it.copy(
+                        operation = IntifaceOperation.Idle,
+                        isConnected = false,
+                        isScanning = false,
+                        isTestingVibration = false,
+                        devices = emptyList(),
+                        selectedDevice = null,
+                        statusMessage = null,
+                        errorMessage = IntifaceUiMessage(IntifaceMessage.UnableToConnect)
+                    )
+                }
+                launchPendingClientDisconnect(lost)
+            }
+            return
+        }
 
         val activeClient = session.first
         val generation = session.second
         fun updateIfCurrent(update: (IntifaceUiState) -> IntifaceUiState) {
             if (isCurrent(activeClient, generation)) {
-                mutableState.value = update(mutableState.value)
+                mutableState.update(update)
             }
         }
         if (!isCurrent(activeClient, generation)) return
@@ -487,18 +514,18 @@ internal class OnlineIntifaceController : IntifaceController {
 
         val selected = mutableState.value.selectedDevice
         if (selected == null) {
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 errorMessage = IntifaceUiMessage(IntifaceMessage.SelectDeviceFirst)
-            )
+            ) }
             return
         }
 
         val activeClient = synchronized(clientLock) { client }
         if (activeClient == null || !activeClient.isConnected()) {
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 isConnected = false,
                 errorMessage = IntifaceUiMessage(IntifaceMessage.UnableToConnect)
-            )
+            ) }
             return
         }
         val generation = operationGeneration.get()
@@ -509,27 +536,27 @@ internal class OnlineIntifaceController : IntifaceController {
             val device = activeClient.getDevices()
                 .firstOrNull { it.getDeviceIndex() == selected.index }
             if (device == null) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     selectedDevice = null,
                     statusMessage = null,
                     errorMessage = IntifaceUiMessage(IntifaceMessage.SelectedDeviceMissing)
-                )
+                ) }
                 return
             }
             deviceToStop = device
             if (device.getScalarVibrateCount() <= 0L) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     errorMessage = IntifaceUiMessage(IntifaceMessage.NoVibrateCapability)
-                )
+                ) }
                 return
             }
 
-            mutableState.value = mutableState.value.copy(
+            mutableState.update { it.copy(
                 operation = IntifaceOperation.Testing,
                 isTestingVibration = true,
                 statusMessage = IntifaceUiMessage(IntifaceMessage.TestVibration),
                 errorMessage = null
-            )
+            ) }
             repeat(TEST_PULSE_COUNT) { pulseIndex ->
                 when (val result = runScalarVibrateIfCurrent(
                     activeClient,
@@ -554,18 +581,18 @@ internal class OnlineIntifaceController : IntifaceController {
                 }
             }
             if (isCurrent(activeClient, generation)) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     statusMessage = IntifaceUiMessage(IntifaceMessage.TestVibrationDone)
-                )
+                ) }
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
             if (isCurrent(activeClient, generation)) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     statusMessage = null,
                     errorMessage = error.toVibrationErrorMessage()
-                )
+                ) }
             }
         } finally {
             deviceToStop?.let { selectedDevice ->
@@ -573,24 +600,24 @@ internal class OnlineIntifaceController : IntifaceController {
                 runStopDeviceIfCurrent(activeClient, generation, selectedDevice)
             }
             if (isCurrent(activeClient, generation)) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     operation = IntifaceOperation.Idle,
                     isTestingVibration = false
-                )
+                ) }
             }
         }
     }
 
     override fun selectDevice(device: IntifaceDeviceInfo) {
         val availableDevice = mutableState.value.devices.firstOrNull { it.index == device.index } ?: return
-        mutableState.value = mutableState.value.copy(
+        mutableState.update { it.copy(
             selectedDevice = availableDevice,
             statusMessage = IntifaceUiMessage(
                 IntifaceMessage.SelectedDevice,
                 listOf(availableDevice.displayName)
             ),
             errorMessage = null
-        )
+        ) }
     }
 
     override fun disconnect() {
@@ -686,11 +713,11 @@ internal class OnlineIntifaceController : IntifaceController {
         }
         newClient.setOnConnected {
             if (isCurrent(newClient, generation)) {
-                mutableState.value = mutableState.value.copy(
+                mutableState.update { it.copy(
                     isConnected = true,
                     statusMessage = IntifaceUiMessage(IntifaceMessage.Connected),
                     errorMessage = null
-                )
+                ) }
             }
         }
     }
@@ -701,10 +728,13 @@ internal class OnlineIntifaceController : IntifaceController {
             .map { it.toDeviceInfo() }
             .sortedBy { it.displayName.lowercase() }
         if (!isCurrent(sourceClient, generation)) return
-        val selected = mutableState.value.selectedDevice
-            ?.takeIf { selectedDevice -> devices.any { it.index == selectedDevice.index } }
-        if (!isCurrent(sourceClient, generation)) return
-        mutableState.value = mutableState.value.copy(devices = devices, selectedDevice = selected)
+        mutableState.update { current ->
+            current.copy(
+                devices = devices,
+                selectedDevice = current.selectedDevice
+                    ?.takeIf { selectedDevice -> devices.any { it.index == selectedDevice.index } }
+            )
+        }
     }
 
     private fun takeAndInvalidateCurrentClient(): ButtplugClientWSClient? {
@@ -739,10 +769,10 @@ internal class OnlineIntifaceController : IntifaceController {
     }
 
     private fun clearTransientMessagesInState() {
-        mutableState.value = mutableState.value.copy(
+        mutableState.update { it.copy(
             statusMessage = null,
             errorMessage = null
-        )
+        ) }
     }
 
     private fun disconnectClient(targetClient: ButtplugClientWSClient?) {

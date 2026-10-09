@@ -113,6 +113,7 @@
     <string name="movement_gauge_drift">Écart</string>
     <string name="movement_gauge_motion">Mouvement</string>
     <string name="violation_count_face">Visage</string>
+    <string name="violation_count_disappeared">Hors cadre</string>
     <string name="final_completed">Terminé</string>
     <string name="final_failed">Échec</string>
     <string name="final_initial_timer">Durée initiale</string>

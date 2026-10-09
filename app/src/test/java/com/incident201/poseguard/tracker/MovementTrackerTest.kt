@@ -279,6 +279,54 @@ class MovementTrackerTest {
         )
     }
 
+    @Test
+    fun `brief keypoint dropout is not reported as disappearance`() {
+        val tracker = MovementTracker()
+        tracker.startTracking(referencePose())
+
+        assertTrue(tracker.trackFrame(PoseLandmarks(), currentTime = 0L).violation is MovementTracker.Violation.None)
+        assertTrue(tracker.trackFrame(PoseLandmarks(), currentTime = 1_000L).violation is MovementTracker.Violation.None)
+        assertTrue(tracker.trackFrame(PoseLandmarks(), currentTime = 1_500L).violation is MovementTracker.Violation.PersonDisappeared)
+        // Continued absence is reported again only after another grace period.
+        assertTrue(tracker.trackFrame(PoseLandmarks(), currentTime = 1_600L).violation is MovementTracker.Violation.None)
+        assertTrue(tracker.trackFrame(PoseLandmarks(), currentTime = 3_000L).violation is MovementTracker.Violation.PersonDisappeared)
+    }
+
+    @Test
+    fun `returning pose restarts the disappearance grace period`() {
+        val tracker = MovementTracker()
+        val reference = referencePose()
+        tracker.startTracking(reference)
+
+        tracker.trackFrame(PoseLandmarks(), currentTime = 0L)
+        tracker.trackFrame(PoseLandmarks(), currentTime = 1_000L)
+        tracker.trackFrame(reference, currentTime = 1_200L)
+        tracker.trackFrame(PoseLandmarks(), currentTime = 1_400L)
+        val result = tracker.trackFrame(PoseLandmarks(), currentTime = 2_800L)
+
+        assertTrue(result.violation is MovementTracker.Violation.None)
+    }
+
+    @Test
+    fun `sustained drift is reported once per grace period, not on every frame`() {
+        val tracker = MovementTracker()
+        val reference = referencePose()
+        val armsLowered = reference.withMovedLandmarks(
+            13 to Point3D(0.34f, 0.56f, 0f),
+            14 to Point3D(0.66f, 0.56f, 0f),
+            15 to Point3D(0.32f, 0.76f, 0f),
+            16 to Point3D(0.68f, 0.76f, 0f)
+        )
+
+        tracker.startTracking(reference)
+        val violations = (0L..3_500L step 250L).count { time ->
+            tracker.trackFrame(armsLowered, currentTime = time).violation is
+                MovementTracker.Violation.DriftLimitExceeded
+        }
+
+        assertEquals(2, violations)
+    }
+
     private fun referencePose(): PoseLandmarks {
         val all = MutableList(33) { Point3D(0.5f, 0.5f, 0f) }
         all[11] = Point3D(0.3f, 0.2f, 0f)

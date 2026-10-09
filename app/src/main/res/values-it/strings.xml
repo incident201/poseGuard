@@ -113,6 +113,7 @@
     <string name="movement_gauge_drift">Scostamento</string>
     <string name="movement_gauge_motion">Movimento</string>
     <string name="violation_count_face">Viso</string>
+    <string name="violation_count_disappeared">Fuori inquadratura</string>
     <string name="final_completed">Completato</string>
     <string name="final_failed">Prova fallita</string>
     <string name="final_initial_timer">Tempo iniziale</string>

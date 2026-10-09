@@ -8,6 +8,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -49,6 +50,7 @@ import com.incident201.poseguard.tracker.landmark
 import com.incident201.poseguard.util.hasRequiredLocalNetworkPermission
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -112,6 +114,8 @@ private const val PREF_AUDIO_CUE_PCM_PATTERN_PREFIX = "audio_cue_pcm_pattern_"
 private const val PREF_TIMER_MODE = "timer_mode"
 private const val PREF_RANDOM_MIN_DURATION_SECONDS = "random_min_duration_seconds"
 private const val PREF_RANDOM_MAX_DURATION_SECONDS = "random_max_duration_seconds"
+private const val PREF_SELECTED_DURATION_SECONDS = "selected_duration_seconds"
+private const val PREF_FACE_DETECTION_CONFIDENCE = "face_conf"
 private const val PREF_INTIFACE_WEBSOCKET_URL = "intiface_websocket_url"
 private const val PREF_INTIFACE_CONNECTION_ENABLED = "intiface_connection_enabled"
 private const val PREF_INTIFACE_SELECTED_DEVICE_NAME = "intiface_selected_device_name"
@@ -272,7 +276,8 @@ data class MovementGaugeState(
 data class RuleViolationCounts(
     val drift: Int = 0,
     val motion: Int = 0,
-    val face: Int = 0
+    val face: Int = 0,
+    val disappeared: Int = 0
 )
 
 data class SessionSummary(
@@ -309,13 +314,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     private val _gameState = MutableStateFlow(GameState.Idle)
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
-    private val _timerSeconds = MutableStateFlow(defaultDurationSeconds)
-    val timerSeconds: StateFlow<Int> = _timerSeconds.asStateFlow()
     private val _violationCount = MutableStateFlow(0)
     val violationCount: StateFlow<Int> = _violationCount.asStateFlow()
     private val _ruleViolationCounts = MutableStateFlow(RuleViolationCounts())
     val ruleViolationCounts: StateFlow<RuleViolationCounts> = _ruleViolationCounts.asStateFlow()
-    private val _selectedDurationSeconds = MutableStateFlow(defaultDurationSeconds)
+    private val _selectedDurationSeconds = MutableStateFlow(
+        prefs.getInt(PREF_SELECTED_DURATION_SECONDS, defaultDurationSeconds).coerceAtLeast(1)
+    )
     val selectedDurationSeconds: StateFlow<Int> = _selectedDurationSeconds.asStateFlow()
     private val _timerMode = MutableStateFlow(
         runCatching {
@@ -323,6 +328,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         }.getOrDefault(TimerMode.Exact)
     )
     val timerMode: StateFlow<TimerMode> = _timerMode.asStateFlow()
+    private val _timerSeconds = MutableStateFlow(
+        if (_timerMode.value == TimerMode.Exact) _selectedDurationSeconds.value else 0
+    )
+    val timerSeconds: StateFlow<Int> = _timerSeconds.asStateFlow()
     private val _randomMinDurationSeconds = MutableStateFlow(
         prefs.getInt(PREF_RANDOM_MIN_DURATION_SECONDS, defaultDurationSeconds).coerceAtLeast(1)
     )
@@ -419,12 +428,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     private enum class RuleViolationType { Drift, Motion, PersonDisappeared, FaceNotMatchingMode }
 
 
+    @Volatile private var localizedResources: Pair<AppLanguage, android.content.res.Resources>? = null
+
     private fun tr(resId: Int, vararg args: Any): String {
-        val locale = _gameSettings.value.language.locale
-        val config = android.content.res.Configuration(getApplication<Application>().resources.configuration)
-        config.setLocale(locale)
-        val res = getApplication<Application>().createConfigurationContext(config).resources
+        val language = _gameSettings.value.language
+        val res = localizedResources?.takeIf { it.first == language }?.second ?: run {
+            val config = android.content.res.Configuration(getApplication<Application>().resources.configuration)
+            config.setLocale(language.locale)
+            getApplication<Application>().createConfigurationContext(config).resources
+                .also { localizedResources = language to it }
+        }
         return if (args.isEmpty()) res.getString(resId) else res.getString(resId, *args)
+    }
+
+    /** Job/sensor/Intiface fields belong to the main thread; result processing runs on a worker. */
+    private fun runOnMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            viewModelScope.launch(Dispatchers.Main.immediate) { block() }
+        }
     }
 
     init {
@@ -481,7 +504,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             accelerationMode = loadAccelerationMode(),
             poseLandmarkerModel = enumPref(PREF_POSE_LANDMARKER_MODEL, PoseLandmarkerModel.Heavy),
             faceCheckMode = mode,
-            faceDetectionConfidence = 0.8f,
+            faceDetectionConfidence = prefs.getFloat(PREF_FACE_DETECTION_CONFIDENCE, 0.8f)
+                .takeIf(Float::isFinite)
+                ?.coerceIn(0.5f, 0.95f)
+                ?: 0.8f,
             driftThresholdFactor = driftThresholdFactor,
             motionThresholdFactor = motionThresholdFactor,
             minimumPenaltyIntervalSeconds = prefs.getInt("penalty_interval_sec", 5).coerceIn(0, 30),
@@ -730,7 +756,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     fun updateFaceDetectionConfidence(value: Float) {
         val normalized = value.coerceIn(0.5f, 0.95f)
         _gameSettings.value = _gameSettings.value.copy(faceDetectionConfidence = normalized)
-        prefs.edit().putFloat("face_conf", normalized).apply()
+        prefs.edit().putFloat(PREF_FACE_DETECTION_CONFIDENCE, normalized).apply()
         faceDetectorService.setMinDetectionConfidence(normalized)
         synchronized(processingLock) {
             consecutiveFaceFailFrames = 0
@@ -895,6 +921,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         if (_gameSettings.value.accelerationMode == mode) return
         if (mode == AccelerationMode.Gpu &&
             _gameSettings.value.accelerationMode != AccelerationMode.Auto
+        ) {
+            return
+        }
+        // A manual GPU choice stays manual; the delegate already falls back to CPU at runtime.
+        if (_gameSettings.value.accelerationMode == AccelerationMode.Gpu &&
+            !prefs.getBoolean(PREF_ACCELERATION_MODE_AUTO_RESOLVED, false)
         ) {
             return
         }
@@ -1385,6 +1417,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     fun updateSelectedDurationSeconds(seconds: Int) {
         val normalizedSeconds = seconds.coerceAtLeast(1)
         _selectedDurationSeconds.value = normalizedSeconds
+        prefs.edit().putInt(PREF_SELECTED_DURATION_SECONDS, normalizedSeconds).apply()
 
         if (
             _timerMode.value == TimerMode.Exact &&
@@ -1737,17 +1770,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                         }
                 }
             } else {
-                triggerIntifaceViolationEffect()
+                runOnMain { triggerIntifaceViolationEffect() }
                 applyPenalty(type, penaltyMinutesForViolation(currentViolationCount))
                 lastPenaltyAtMs = now
                 return false
             }
         }
 
-        triggerIntifaceViolationEffect(
-            resumeBackgroundAfter = false,
-            requireHoldingPose = false
-        )
+        runOnMain {
+            triggerIntifaceViolationEffect(
+                resumeBackgroundAfter = false,
+                requireHoldingPose = false
+            )
+        }
         completeDefeatAfterReservation(
             terminalDefeatReason ?: return true,
             preserveIntifaceOverride = true
@@ -1763,7 +1798,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             RuleViolationType.Drift -> _ruleViolationCounts.value.copy(drift = _ruleViolationCounts.value.drift + 1)
             RuleViolationType.Motion -> _ruleViolationCounts.value.copy(motion = _ruleViolationCounts.value.motion + 1)
             RuleViolationType.FaceNotMatchingMode -> _ruleViolationCounts.value.copy(face = _ruleViolationCounts.value.face + 1)
-            RuleViolationType.PersonDisappeared -> _ruleViolationCounts.value
+            RuleViolationType.PersonDisappeared -> _ruleViolationCounts.value.copy(disappeared = _ruleViolationCounts.value.disappeared + 1)
         }
     }
 
@@ -1783,7 +1818,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     private fun applyPenalty(type: RuleViolationType, minutes: Int) {
         val sec = minutes * 60
-        if (_gameSettings.value.penaltiesEnabled && sec > 0) {
+        val penaltyApplied = _gameSettings.value.penaltiesEnabled && sec > 0
+        if (penaltyApplied) {
             synchronized(sessionTargetLock) {
                 if (_gameState.value == GameState.HoldingPose &&
                     pendingTerminalResult == null
@@ -1795,7 +1831,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         }
 
         if (type == RuleViolationType.FaceNotMatchingMode) {
-            val statusText = if (_gameSettings.value.penaltiesEnabled) {
+            val statusText = if (penaltyApplied) {
                 tr(R.string.face_rule_violated_with_penalty, minutes)
             } else {
                 tr(R.string.face_rule_violated)
@@ -1811,7 +1847,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             } else {
                 AudioCue.FaceLookedAtCamera
             }
-            val cueText = if (_gameSettings.value.penaltiesEnabled) {
+            val cueText = if (penaltyApplied) {
                 "${ttsText(prefixTemplate)}. ${ttsText(TtsPhraseTemplate.PenaltyAddedToTimer, minutes)}"
             } else {
                 ttsText(prefixTemplate)
@@ -1826,7 +1862,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             else -> AudioCue.ViolationRecorded to TtsPhraseTemplate.ViolationRecorded
         }
 
-        if (_gameSettings.value.penaltiesEnabled) {
+        if (penaltyApplied) {
             _statusMessage.value = tr(R.string.violation_recorded_with_penalty, minutes)
             playAudioCue(
                 cue,
@@ -2246,20 +2282,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         preserveIntifaceOverride: Boolean = false,
         stoppedByTechnicalError: Boolean = false
     ) {
-        if (preserveIntifaceOverride) {
-            intifaceBackgroundJob?.cancel()
-            intifaceBackgroundJob = null
-        } else {
-            stopIntifaceSessionSignals()
-        }
+        runOnMain {
+            if (preserveIntifaceOverride) {
+                intifaceBackgroundJob?.cancel()
+                intifaceBackgroundJob = null
+            } else {
+                stopIntifaceSessionSignals()
+            }
 
-        startDelayJob?.cancel()
-        timerJob?.cancel()
-        stabilizationFallbackJob?.cancel()
-        stabilizationFallbackJob = null
-        sensorManager.unregisterListener(this)
-        stabilizationStableSinceMs = null
-        stabilizationCompleted = false
+            startDelayJob?.cancel()
+            timerJob?.cancel()
+            stabilizationFallbackJob?.cancel()
+            stabilizationFallbackJob = null
+            sensorManager.unregisterListener(this)
+            stabilizationStableSinceMs = null
+            stabilizationCompleted = false
+        }
         _startDelayRemainingSeconds.value = 0
         synchronized(processingLock) {
             processingGeneration += 1

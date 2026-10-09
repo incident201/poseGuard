@@ -113,6 +113,7 @@
     <string name="movement_gauge_drift">Desviación</string>
     <string name="movement_gauge_motion">Movimiento</string>
     <string name="violation_count_face">Rostro</string>
+    <string name="violation_count_disappeared">Fuera del encuadre</string>
     <string name="final_completed">Completado</string>
     <string name="final_failed">Intento fallido</string>
     <string name="final_initial_timer">Tiempo inicial</string>
