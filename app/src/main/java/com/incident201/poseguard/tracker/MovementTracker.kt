@@ -150,6 +150,9 @@ class MovementTracker {
     private var lastDriftCheckTimeMs: Long? = null
 
     private val driftGraceMs = 1500L
+    // Short detector dropouts must not count as leaving the frame.
+    private val disappearanceGraceMs = 1500L
+    private var keypointsMissingSince: Long? = null
     private val driftResetFactor = 0.85f
     private val driftDecayMultiplier = 0.5f
 
@@ -171,6 +174,7 @@ class MovementTracker {
         driftBreachAccumulatedMs = 0L
         lastDriftCheckTimeMs = null
         motionExceededSince = null
+        keypointsMissingSince = null
         Log.i(TAG, "Started tracking with 2D reference scale = $referenceScale")
     }
 
@@ -185,6 +189,7 @@ class MovementTracker {
         driftBreachAccumulatedMs = 0L
         lastDriftCheckTimeMs = null
         motionExceededSince = null
+        keypointsMissingSince = null
     }
 
     fun trackFrame(currentPose: PoseLandmarks, currentTime: Long = System.currentTimeMillis()): TrackingResult {
@@ -197,9 +202,16 @@ class MovementTracker {
         // Check if person is valid (or vanished completely if major keypoints are missing)
         val keypointsPresent = countKeypoints(currentPose)
         if (!currentPose.hasEnoughKeypoints() || refCenter == null || currentCenter == null) {
+            val missingSince = keypointsMissingSince ?: currentTime.also { keypointsMissingSince = it }
+            if (currentTime - missingSince < disappearanceGraceMs) {
+                return TrackingResult(Violation.None, MovementMetrics())
+            }
+            // Restart the grace window so continued absence is reported periodically, not per frame.
+            keypointsMissingSince = currentTime
             Log.w(TAG, "Keypoints disappeared or insufficient. Count = $keypointsPresent")
             return TrackingResult(Violation.PersonDisappeared, MovementMetrics())
         }
+        keypointsMissingSince = null
 
         val currentNormalizedPose = normalizedPoseMap(currentPose, currentCenter, referenceScale)
         val refNormalized = if (referenceNormalizedPose.isNotEmpty()) {
@@ -286,6 +298,9 @@ class MovementTracker {
                 "Drift breach! Score: $driftScore, Threshold: $driftThresholdFactor, " +
                     "AccumulatedMs: $driftBreachAccumulatedMs"
             )
+            // Each reported breach needs its own grace period; otherwise a sustained drift
+            // is reported on every frame and a zero penalty interval ends the session instantly.
+            driftBreachAccumulatedMs = 0L
             return Violation.DriftLimitExceeded(driftScore, driftThresholdFactor)
         }
 
@@ -299,6 +314,7 @@ class MovementTracker {
             if (motionExceededSince == null) {
                 motionExceededSince = currentTime
             } else if (currentTime - motionExceededSince!! > 900) {
+                motionExceededSince = null
                 Log.w(TAG, "Motion breach! Score: $motionScore, Threshold: $motionThresholdFactor")
                 return Violation.MotionLimitExceeded(motionScore, motionThresholdFactor)
             }

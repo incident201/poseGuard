@@ -1823,20 +1823,30 @@ private fun IntegerSettingField(
     max: Int,
     enabled: Boolean = true
 ) {
-    var text by remember(value) { mutableStateOf(value.toString()) }
+    var text by remember { mutableStateOf(value.toString()) }
+    val currentValue by rememberUpdatedState(value)
+    // Follow external/coerced updates without overwriting an edit that already matches.
+    LaunchedEffect(value) {
+        if (text.toIntOrNull() != value) text = value.toString()
+    }
     OutlinedTextField(
         value = text,
         enabled = enabled,
         onValueChange = { input ->
             val digits = input.filter { it.isDigit() }
             text = digits
-            val parsed = digits.toIntOrNull() ?: min
+            // An empty field is an edit in progress, not a request for the minimum value.
+            val parsed = digits.toIntOrNull() ?: return@OutlinedTextField
             if (enabled) onValueChanged(parsed.coerceIn(min, max))
         },
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focusState ->
+                if (!focusState.isFocused) text = currentValue.toString()
+            }
     )
     Spacer(Modifier.height(8.dp))
 }

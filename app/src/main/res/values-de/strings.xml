@@ -113,6 +113,7 @@
     <string name="movement_gauge_drift">Abweichung</string>
     <string name="movement_gauge_motion">Bewegung</string>
     <string name="violation_count_face">Gesicht</string>
+    <string name="violation_count_disappeared">Außerhalb des Bildes</string>
     <string name="final_completed">Abgeschlossen</string>
     <string name="final_failed">Nicht geschafft</string>
     <string name="final_initial_timer">Anfangszeit</string>

@@ -17,6 +17,9 @@ import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.hardware.display.DisplayManager
+import android.os.Handler
+import android.os.Looper
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -151,12 +154,19 @@ private val POSE_CONNECTIONS = listOf(
 
 
 @Composable
-internal fun localizedString(language: AppLanguage, @StringRes id: Int): String {
+internal fun localizedString(language: AppLanguage, @StringRes id: Int): String =
+    localizedResources(language).getString(id)
+
+@Composable
+private fun localizedResources(language: AppLanguage): android.content.res.Resources {
     val context = LocalContext.current
-    val locale = localeFor(language)
-    val config = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current)
-    config.setLocale(locale)
-    return context.createConfigurationContext(config).resources.getString(id)
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    // Creating a configuration context is expensive; the camera screen recomposes several times per second.
+    return remember(context, configuration, language) {
+        val config = android.content.res.Configuration(configuration)
+        config.setLocale(localeFor(language))
+        context.createConfigurationContext(config).resources
+    }
 }
 
 @Composable
@@ -164,13 +174,7 @@ internal fun localizedFormatString(
     language: AppLanguage,
     @StringRes id: Int,
     vararg args: Any
-): String {
-    val context = LocalContext.current
-    val locale = localeFor(language)
-    val config = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current)
-    config.setLocale(locale)
-    return context.createConfigurationContext(config).resources.getString(id, *args)
-}
+): String = localizedResources(language).getString(id, *args)
 
 private fun cameraSelectorFor(lensFacing: Int): CameraSelector {
     return when (lensFacing) {
@@ -205,8 +209,6 @@ fun CameraScreen(
     val randomMinDurationSeconds by viewModel.randomMinDurationSeconds.collectAsState()
     val randomMaxDurationSeconds by viewModel.randomMaxDurationSeconds.collectAsState()
     val startDelayRemainingSeconds by viewModel.startDelayRemainingSeconds.collectAsState()
-    val poseOverlayState by viewModel.poseOverlayState.collectAsState()
-    val movementGaugeState by viewModel.movementGaugeState.collectAsState()
     val violationCount by viewModel.violationCount.collectAsState()
     val ruleViolationCounts by viewModel.ruleViolationCounts.collectAsState()
     val sessionSummary by viewModel.sessionSummary.collectAsState()
@@ -474,6 +476,7 @@ fun CameraScreen(
     val lastPoseTimestampMs = remember { AtomicLong(0L) }
     val cameraBindingGeneration = remember { AtomicLong(0L) }
     var imageAnalysisRef by remember { mutableStateOf<ImageAnalysis?>(null) }
+    var previewUseCaseRef by remember { mutableStateOf<Preview?>(null) }
     var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var boundLensFacing by remember { mutableStateOf<Int?>(null) }
     var availableLensFacings by remember { mutableStateOf<List<Int>>(emptyList()) }
@@ -549,6 +552,23 @@ fun CameraScreen(
         landmarkerService?.setAccelerationMode(gameSettings.accelerationMode)
     }
 
+    // The activity handles rotation without being recreated; keep CameraX output aligned.
+    DisposableEffect(view) {
+        val displayManager = context.getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                val display = view.display ?: return
+                if (display.displayId != displayId) return
+                imageAnalysisRef?.targetRotation = display.rotation
+                previewUseCaseRef?.targetRotation = display.rotation
+            }
+        }
+        displayManager?.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        onDispose { displayManager?.unregisterDisplayListener(listener) }
+    }
+
     // Clean up
     DisposableEffect(Unit) {
         onDispose {
@@ -556,6 +576,7 @@ fun CameraScreen(
             cameraBindingGeneration.incrementAndGet()
             imageAnalysisRef?.clearAnalyzer()
             imageAnalysisRef = null
+            previewUseCaseRef = null
             runCatching { cameraProviderRef?.unbindAll() }
                 .onFailure { Log.w("CameraScreen", "Failed to unbind camera on dispose", it) }
             cameraProviderRef = null
@@ -697,6 +718,7 @@ fun CameraScreen(
                 .apply {
                     surfaceProvider = previewView.surfaceProvider
                 }
+            previewUseCaseRef = preview
 
             val imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -948,6 +970,7 @@ fun CameraScreen(
                             cameraBindingGeneration.incrementAndGet()
                             imageAnalysisRef?.clearAnalyzer()
                             imageAnalysisRef = null
+                            previewUseCaseRef = null
                             runCatching {
                                 cameraProviderRef?.unbindAll()
                             }.onFailure {
@@ -1016,8 +1039,8 @@ fun CameraScreen(
             }
 
             if (!showFinalScreen && SHOW_POSE_DEBUG_OVERLAY) {
-                PoseDebugOverlay(
-                    overlayState = poseOverlayState,
+                PoseDebugOverlayHost(
+                    viewModel = viewModel,
                     mirrorX = selectedLensFacing == CameraSelector.LENS_FACING_FRONT,
                     debugModeEnabled = debugModeEnabled,
                     modifier = Modifier
@@ -1037,9 +1060,9 @@ fun CameraScreen(
                 )
             }
 
-            if (!showFinalScreen && movementGaugeState.active) {
-                MovementGaugeOverlay(
-                    state = movementGaugeState,
+            if (!showFinalScreen) {
+                MovementGaugeOverlayHost(
+                    viewModel = viewModel,
                     language = gameSettings.language,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -1102,6 +1125,34 @@ fun CameraScreen(
 }
 
 
+
+// Pose results arrive several times per second: collect them here so only the overlay recomposes.
+@Composable
+private fun PoseDebugOverlayHost(
+    viewModel: GameViewModel,
+    mirrorX: Boolean,
+    debugModeEnabled: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val overlayState by viewModel.poseOverlayState.collectAsState()
+    PoseDebugOverlay(
+        overlayState = overlayState,
+        mirrorX = mirrorX,
+        debugModeEnabled = debugModeEnabled,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun MovementGaugeOverlayHost(
+    viewModel: GameViewModel,
+    language: AppLanguage,
+    modifier: Modifier = Modifier
+) {
+    val state by viewModel.movementGaugeState.collectAsState()
+    if (!state.active) return
+    MovementGaugeOverlay(state = state, language = language, modifier = modifier)
+}
 
 @Composable
 private fun AccelerationDebugIndicator(
@@ -1332,6 +1383,14 @@ private fun FinalSessionScreen(
                             label = localizedString(language, R.string.violation_count_face),
                             value = summary.violationCounts.face,
                             modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (summary.violationCounts.disappeared > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        FinalCounterCard(
+                            label = localizedString(language, R.string.violation_count_disappeared),
+                            value = summary.violationCounts.disappeared,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
 
@@ -1600,6 +1659,10 @@ private fun ViolationCountsOverlay(
         ViolationCountText(
             label = localizedString(language, R.string.violation_count_face),
             count = counts.face
+        )
+        ViolationCountText(
+            label = localizedString(language, R.string.violation_count_disappeared),
+            count = counts.disappeared
         )
     }
 }

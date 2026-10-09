@@ -113,6 +113,7 @@
     <string name="movement_gauge_drift">Drift</string>
     <string name="movement_gauge_motion">Motion</string>
     <string name="violation_count_face">Face</string>
+    <string name="violation_count_disappeared">Out of frame</string>
     <string name="final_completed">Completed</string>
     <string name="final_failed">Failure</string>
     <string name="final_initial_timer">Initial timer</string>

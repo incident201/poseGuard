@@ -28,6 +28,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TimelapseRecorder(
     private val context: Context
@@ -58,6 +59,19 @@ class TimelapseRecorder(
     private var lastPresentationTimeUs = -1L
     private var hadEncodingError = false
     private val pendingPresentationTimesUs = ArrayDeque<Long>()
+
+    init {
+        // Temp recordings of a killed process are never handed to the UI; drop them once per process.
+        if (staleFilesCleaned.compareAndSet(false, true)) {
+            runCatching {
+                frameExecutor.execute {
+                    context.cacheDir.listFiles { file ->
+                        file.isFile && file.name.startsWith(TEMP_FILE_PREFIX) && file.name.endsWith(".mp4")
+                    }?.forEach { it.delete() }
+                }
+            }
+        }
+    }
 
     fun start(startTimestampMs: Long) {
         synchronized(lock) {
@@ -252,13 +266,15 @@ class TimelapseRecorder(
         videoWidth = width
         videoHeight = height
 
-        val tempFile = File(context.cacheDir, "pose_timelapse_${UUID.randomUUID()}.mp4")
+        val tempFile = File(context.cacheDir, "$TEMP_FILE_PREFIX${UUID.randomUUID()}.mp4")
         outputFile = tempFile
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, calculateBitrate(width, height))
-            setInteger(MediaFormat.KEY_FRAME_RATE, OUTPUT_FPS)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL_SEC)
+            // Surface frames are timestamped in real time, while the muxer compresses time by
+            // SPEED_FACTOR. Describe the real-time input so the bitrate budget matches the video.
+            setInteger(MediaFormat.KEY_BIT_RATE, (calculateBitrate(width, height) / SPEED_FACTOR).toInt())
+            setInteger(MediaFormat.KEY_FRAME_RATE, INPUT_FPS)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, (I_FRAME_INTERVAL_SEC * SPEED_FACTOR).toInt())
         }
 
         val newEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -354,7 +370,8 @@ class TimelapseRecorder(
 
     private fun renderFrameToSurface(frame: Bitmap) {
         val surface = inputSurface ?: return
-        val canvas = surface.lockCanvas(null)
+        // MediaCodec input surfaces must be rendered with a hardware API; lockCanvas() is unsupported there.
+        val canvas = surface.lockHardwareCanvas()
         try {
             canvas.drawBitmap(frame, 0f, 0f, null)
         } finally {
@@ -459,12 +476,16 @@ class TimelapseRecorder(
     private companion object {
         private const val TAG = "TimelapseRecorder"
         private const val OUTPUT_FPS = 30
-        private const val CAPTURE_INTERVAL_MS = 100L
         private const val SPEED_FACTOR = 10L
+        // One captured frame per output frame: 30 fps after the 10x speed-up.
+        private const val CAPTURE_INTERVAL_MS = 1_000L * SPEED_FACTOR / OUTPUT_FPS
+        private const val INPUT_FPS = (1_000L / CAPTURE_INTERVAL_MS).toInt()
         private const val I_FRAME_INTERVAL_SEC = 1
         private const val DRAIN_TIMEOUT_US = 10_000L
         private const val FINALIZE_TIMEOUT_MS = 3_000L
         private const val STOP_TIMEOUT_SECONDS = 10L
+        private const val TEMP_FILE_PREFIX = "pose_timelapse_"
+        private val staleFilesCleaned = AtomicBoolean(false)
     }
 }
 
