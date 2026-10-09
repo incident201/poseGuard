@@ -232,7 +232,7 @@ class FaceCheckAvailabilityTest {
         override suspend fun testVibration() = Unit
         override suspend fun setVibrationStrength(strength: Double) { strengths.add(strength) }
         override suspend fun stopVibration() { stopCount++ }
-        override fun selectDevice(device: IntifaceDeviceInfo) = Unit
+        override suspend fun selectDevice(device: IntifaceDeviceInfo) = Unit
         override fun disconnect() = Unit
         override suspend fun resetConnection() = Unit
         override fun clearTransientMessages() = Unit

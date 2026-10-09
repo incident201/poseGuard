@@ -39,7 +39,7 @@ private class OfflineIntifaceController : IntifaceController {
         mutableState.value = mutableState.value.copy(errorMessage = onlineOnlyMessage)
     }
 
-    override fun selectDevice(device: IntifaceDeviceInfo) = Unit
+    override suspend fun selectDevice(device: IntifaceDeviceInfo) = Unit
 
     override fun disconnect() = Unit
 

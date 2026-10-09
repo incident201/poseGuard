@@ -290,12 +290,17 @@ data class SessionSummary(
     val stoppedByTechnicalError: Boolean = false
 )
 
-class GameViewModel(application: Application) : AndroidViewModel(application), SensorEventListener {
+class GameViewModel internal constructor(
+    application: Application,
+    private val sessionTiming: SessionTiming
+) : AndroidViewModel(application), SensorEventListener {
+    constructor(application: Application) : this(application, SessionTiming())
+
     private val tag = "GameViewModel"
     private val defaultDurationSeconds = 180
-    private val startDelaySeconds = 10
+    private val startDelaySeconds = sessionTiming.startDelaySeconds
     private val poseOcclusionCalibrationSeconds = 2
-    private val stabilizationDurationMs = 4_000L
+    private val stabilizationDurationMs = sessionTiming.stabilizationDurationMs
     private val gyroscopeStillThresholdRadPerSec = 0.08f
 
     private val sensorManager =
@@ -415,6 +420,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     private var intifaceOverrideJob: Job? = null
     private val intifaceSignalGeneration = AtomicLong(0L)
     private val intifaceSignalCommandMutex = Mutex()
+    private val intifaceDeviceSelectionMutex = Mutex()
 
     private enum class RunMode { Background, Violation }
 
@@ -1061,18 +1067,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     fun selectIntifaceDevice(device: IntifaceDeviceInfo) {
-        prefs.edit()
-            .putString(PREF_INTIFACE_SELECTED_DEVICE_NAME, device.name)
-            .putString(PREF_INTIFACE_SELECTED_DEVICE_DISPLAY_NAME, device.displayName)
-            .putLong(PREF_INTIFACE_SELECTED_DEVICE_INDEX, device.index)
-            .apply()
-        _gameSettings.value = _gameSettings.value.copy(
-            intifaceSelectedDeviceName = device.name,
-            intifaceSelectedDeviceDisplayName = device.displayName,
-            intifaceSelectedDeviceIndex = device.index
-        )
-        intifaceController.selectDevice(device)
-        restartIntifaceBackgroundIfNeeded()
+        viewModelScope.launch {
+            intifaceDeviceSelectionMutex.withLock {
+                intifaceController.selectDevice(device)
+                val selected = intifaceController.state.value.selectedDevice ?: return@withLock
+                if (selected.index != device.index) return@withLock
+                prefs.edit()
+                    .putString(PREF_INTIFACE_SELECTED_DEVICE_NAME, selected.name)
+                    .putString(PREF_INTIFACE_SELECTED_DEVICE_DISPLAY_NAME, selected.displayName)
+                    .putLong(PREF_INTIFACE_SELECTED_DEVICE_INDEX, selected.index)
+                    .apply()
+                _gameSettings.value = _gameSettings.value.copy(
+                    intifaceSelectedDeviceName = selected.name,
+                    intifaceSelectedDeviceDisplayName = selected.displayName,
+                    intifaceSelectedDeviceIndex = selected.index
+                )
+                restartIntifaceBackgroundIfNeeded()
+            }
+        }
     }
 
     fun autoConnectIntifaceIfRemembered() {
@@ -1685,13 +1697,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         when (status) {
             FaceDetectionStatus.Error, FaceDetectionStatus.NotProcessed -> {
                 if (faceCheckUnavailableSinceMs == null) {
-                    faceCheckUnavailableSinceMs = SystemClock.elapsedRealtime()
+                    faceCheckUnavailableSinceMs = sessionTiming.nowMs()
                     Log.w(tag, "face_check_unavailable status=$status timeoutMs=$FACE_CHECK_UNAVAILABLE_TIMEOUT_MS")
                 }
             }
             FaceDetectionStatus.FaceVisible, FaceDetectionStatus.FaceNotVisible -> {
                 faceCheckUnavailableSinceMs?.let {
-                    Log.i(tag, "face_check_recovered elapsedMs=${SystemClock.elapsedRealtime() - it}")
+                    Log.i(tag, "face_check_recovered elapsedMs=${sessionTiming.nowMs() - it}")
                 }
                 faceCheckUnavailableSinceMs = null
             }
@@ -1707,9 +1719,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             return false
         }
         val since = faceCheckUnavailableSinceMs ?: return false
-        if (SystemClock.elapsedRealtime() - since < FACE_CHECK_UNAVAILABLE_TIMEOUT_MS) return false
+        if (sessionTiming.nowMs() - since < FACE_CHECK_UNAVAILABLE_TIMEOUT_MS) return false
         if (!tryReserveSessionDefeat()) return false
-        Log.e(tag, "face_check_timeout elapsedMs=${SystemClock.elapsedRealtime() - since}; session stopped without penalty")
+        Log.e(tag, "face_check_timeout elapsedMs=${sessionTiming.nowMs() - since}; session stopped without penalty")
         completeDefeatAfterReservation(
             reason = tr(R.string.face_check_unavailable),
             stoppedByTechnicalError = true
@@ -1742,7 +1754,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     private fun handleRuleViolation(type: RuleViolationType, pose: PoseLandmarks): Boolean {
-        val now = SystemClock.elapsedRealtime()
+        val now = sessionTiming.nowMs()
         if (lastPenaltyAtMs > 0L && now - lastPenaltyAtMs < _gameSettings.value.minimumPenaltyIntervalSeconds * 1000L) {
             return false
         }
@@ -2005,7 +2017,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         while (SystemClock.elapsedRealtime() <= deadline) {
             val frame = synchronized(frameLock) { latestAnalyzedFrame }
             if (frame != null) {
-                val ageMs = SystemClock.elapsedRealtime() - frame.timestampMs
+                val ageMs = sessionTiming.nowMs() - frame.timestampMs
                 if (ageMs in 0..maxAgeMs) {
                     return frame
                 }
@@ -2017,7 +2029,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
 
     private fun sessionElapsedSecondsForSummary(): Int {
         return synchronized(sessionTargetLock) {
-            sessionClock.snapshot(SystemClock.elapsedRealtime()).elapsedSeconds
+            sessionClock.snapshot(sessionTiming.nowMs()).elapsedSeconds
         }
     }
 
@@ -2081,7 +2093,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     private fun updateSessionTimerLocked(): Boolean {
-        val snapshot = sessionClock.snapshot(SystemClock.elapsedRealtime())
+        val snapshot = sessionClock.snapshot(sessionTiming.nowMs())
         _timerSeconds.value = if (sessionTimerMode == TimerMode.Random) {
             snapshot.elapsedSeconds
         } else {
@@ -2105,7 +2117,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
         if (stopIfFaceCheckTimedOut()) return@synchronized
         // A stalled camera/delegate must not award success without pose validation.
         val lastFrame = synchronized(frameLock) { latestAnalyzedFrame }
-        if (lastFrame == null || SystemClock.elapsedRealtime() - lastFrame.timestampMs > 5_000L) {
+        if (lastFrame == null || sessionTiming.nowMs() - lastFrame.timestampMs > 5_000L) {
             triggerDefeat(tr(R.string.camera_no_frame))
             return@synchronized
         }
@@ -2202,7 +2214,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
             if (initialPose == null || !initialPose.hasEnoughKeypoints()) { triggerDefeat(tr(R.string.camera_no_body)); return@launch }
             _timerSeconds.value = if (sessionTimerMode == TimerMode.Exact) sessionInitialTimerSeconds else 0
             synchronized(sessionTargetLock) {
-                sessionClock.start(SystemClock.elapsedRealtime())
+                sessionClock.start(sessionTiming.nowMs())
             }
             synchronized(processingLock) {
                 processingGeneration += 1
@@ -2251,7 +2263,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application), S
                 event.values[2] * event.values[2]
         )
 
-        val now = SystemClock.elapsedRealtime()
+        val now = sessionTiming.nowMs()
         if (magnitude <= gyroscopeStillThresholdRadPerSec) {
             val stableSince = stabilizationStableSinceMs ?: now.also { stabilizationStableSinceMs = it }
             if (now - stableSince >= stabilizationDurationMs) {

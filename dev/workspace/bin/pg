@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+set -euo pipefail
+workspace="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$workspace/env.sh"
+project="$workspace/poseGuard"
+package=com.incident201.poseguard
+activity="$package/.MainActivity"
+mkdir -p "$workspace/artifacts"
+
+usage() {
+  cat <<'EOF'
+Usage: pg COMMAND [arguments]
+  setup                         Install/repair the local toolchain
+  doctor                        Check tools, SDK and physical device access
+  build [offline|online|both]    Build debug APKs (default: both)
+  test [offline|online|both]     Run JVM/Robolectric tests (default: both)
+  lint [offline|online|both]     Android lint (default: both)
+  test-apk [offline|online|both]  Build instrumentation APKs (default: both)
+  verify                        Tests, lint, debug/test APKs, release R8 checks
+  device-test [offline|online]   Instrumentation on a physical device
+  quick-test [offline|online]    Fast scenarios via ADB; online includes Intiface
+  camera-smoke [offline|online]  Real camera + MediaPipe + activity recreation
+  intiface-test                 Controller and session signal integration tests
+  restart-test                  Persisted Intiface selection after actual force-stop
+  scenario FLAVOR CLASS[#TEST]   Run one scenario/class; optional --no-build
+  intiface                      Run the local Intiface lab until Ctrl+C
+  devices                       List connected devices
+  install [offline|online]       Build and install debug APK (default: offline)
+  launch                        Open PoseGuard on the physical device
+  stop                          Force-stop PoseGuard
+  logs [logcat arguments]        Follow logs for the running app's PID
+  crashes [logcat arguments]     Read Android's crash buffer
+  diagnostics                   Save app, camera, sensor and memory diagnostics
+  screenshot [output.png]        Save the device display
+  bugreport [output.zip]         Save an Android bug report
+  mirror [scrcpy arguments]      Display/control the device with scrcpy
+  debug [port]                  Restart, wait for debugger and attach JDB
+  profile [seconds]             Record a system trace with device Perfetto
+  adb [arguments]               Pass arguments to the local ADB
+  gradle [arguments]            Run Gradle in the PoseGuard project
+Set ANDROID_SERIAL to select a device when several are connected.
+EOF
+}
+
+physical_device() {
+  local state model
+  if ! state="$(adb get-state 2>&1)" || [[ "$state" != device ]]; then
+    printf 'Physical device is not ready: %s\n' "$state" >&2
+    adb devices -l >&2
+    exit 1
+  fi
+  model="$(adb shell getprop ro.kernel.qemu | tr -d '\r')"
+  [[ "$model" != 1 ]] || { echo 'Select a physical device with ANDROID_SERIAL.' >&2; exit 1; }
+}
+
+flavor_tasks() {
+  local prefix="$1" suffix="$2" flavor="${3:-both}"
+  case "$flavor" in
+    offline) gradle -p "$project" ":app:${prefix}Offline${suffix}" ;;
+    online) gradle -p "$project" ":app:${prefix}Online${suffix}" ;;
+    both) gradle -p "$project" ":app:${prefix}Offline${suffix}" ":app:${prefix}Online${suffix}" ;;
+    *) echo 'Flavor must be offline, online or both.' >&2; exit 2 ;;
+  esac
+}
+
+command_name="${1:-help}"
+[[ "$#" == 0 ]] || shift
+case "$command_name" in
+  setup) exec "$workspace/tools/setup.sh" "$@" ;;
+  help|-h|--help) usage ;;
+  doctor)
+    java -version
+    gradle --version
+    adb version
+    scrcpy --version
+    "$workspace/.tools/intiface-engine/intiface-engine" --version
+    "$workspace/.tools/python/bin/python" -c 'import websockets; print("Python Intiface lab: websockets", websockets.__version__)'
+    cat "$ANDROID_HOME/cmdline-tools/latest/source.properties" "$ANDROID_HOME/platforms/android-37/source.properties" "$ANDROID_HOME/build-tools/37.0.0/source.properties"
+    [[ -f "$project/local.properties" && -f "$project/debug.keystore" ]]
+    [[ ! -e "$ANDROID_HOME/emulator" && ! -e "$ANDROID_HOME/system-images" ]]
+    adb devices -l
+    ;;
+  build) flavor_tasks assemble Debug "${1:-both}" ;;
+  test) flavor_tasks test DebugUnitTest "${1:-both}" ;;
+  lint) flavor_tasks lint Debug "${1:-both}" ;;
+  test-apk) flavor_tasks assemble DebugAndroidTest "${1:-both}" ;;
+  verify)
+    exec gradle -p "$project" :app:testOfflineDebugUnitTest :app:testOnlineDebugUnitTest :app:lintOfflineDebug :app:lintOnlineDebug :app:assembleOfflineDebug :app:assembleOnlineDebug :app:assembleOfflineDebugAndroidTest :app:assembleOnlineDebugAndroidTest :app:minifyOfflineReleaseWithR8 :app:minifyOnlineReleaseWithR8
+    ;;
+  device-test)
+    physical_device
+    flavor="${1:-offline}"
+    [[ "$flavor" == offline || "$flavor" == online ]] || { echo 'Choose offline or online.' >&2; exit 2; }
+    # Explicitly restrict AGP's device provider to the physical device just checked.
+    export ANDROID_SERIAL="$(adb get-serialno | tr -d '\r')"
+    flavor_tasks connected DebugAndroidTest "$flavor"
+    ;;
+  quick-test) exec "$workspace/tools/device-test.sh" "${1:-offline}" core "${2:-}" ;;
+  camera-smoke) exec "$workspace/tools/device-test.sh" "${1:-offline}" camera "${2:-}" ;;
+  intiface-test) exec "$workspace/tools/device-test.sh" online intiface "${1:-}" ;;
+  restart-test) exec "$workspace/tools/device-test.sh" online restart "${1:-}" ;;
+  scenario)
+    [[ "$#" -ge 2 && "$#" -le 3 ]] || { echo 'Usage: pg scenario offline|online Class[#testMethod] [--no-build]' >&2; exit 2; }
+    test_filter="$2"
+    [[ "$test_filter" == com.incident201.poseguard.* ]] || test_filter="com.incident201.poseguard.scenario.$test_filter"
+    exec "$workspace/tools/device-test.sh" "$1" scenario "${3:-}" "$test_filter"
+    ;;
+  intiface) exec "$workspace/.tools/python/bin/python" "$workspace/tools/intiface/lab.py" serve "$@" ;;
+  devices) exec adb devices -l ;;
+  install)
+    physical_device
+    flavor="${1:-offline}"
+    [[ "$flavor" == offline || "$flavor" == online ]] || { echo 'Choose offline or online.' >&2; exit 2; }
+    flavor_tasks assemble Debug "$flavor"
+    exec adb install -r "$project/app/build/outputs/apk/$flavor/debug/app-$flavor-debug.apk"
+    ;;
+  launch) physical_device; exec adb shell am start -n "$activity" ;;
+  stop) physical_device; exec adb shell am force-stop "$package" ;;
+  logs)
+    physical_device
+    app_pid="$(adb shell pidof -s "$package" | tr -d '\r')" || true
+    [[ "$app_pid" =~ ^[0-9]+$ ]] || { echo 'PoseGuard is not running.' >&2; exit 1; }
+    exec adb logcat --pid="$app_pid" -v threadtime "$@"
+    ;;
+  crashes) physical_device; exec adb logcat -b crash -d -v threadtime "$@" ;;
+  diagnostics)
+    physical_device
+    output="$workspace/artifacts/diagnostics-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$output"
+    for service in "package $package" "activity activities" "meminfo $package" media.camera sensorservice thermalservice; do
+      read -r -a service_args <<< "$service"
+      adb shell dumpsys "${service_args[@]}" > "$output/${service_args[0]}.txt"
+    done
+    adb logcat -b crash -d -v threadtime > "$output/crashes.txt"
+    printf '%s\n' "$output"
+    ;;
+  screenshot)
+    physical_device
+    output="${1:-$workspace/artifacts/screenshot-$(date +%Y%m%d-%H%M%S).png}"
+    adb exec-out screencap -p > "$output"
+    printf '%s\n' "$output"
+    ;;
+  bugreport)
+    physical_device
+    exec adb bugreport "${1:-$workspace/artifacts/bugreport-$(date +%Y%m%d-%H%M%S).zip}"
+    ;;
+  mirror) physical_device; exec scrcpy --no-audio "$@" ;;
+  debug)
+    physical_device
+    port="${1:-8700}"
+    [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )) || { echo 'Choose a port between 1024 and 65535.' >&2; exit 2; }
+    debugger_wait_set=false
+    debugger_forward_set=false
+    cleanup() {
+      if [[ "$debugger_wait_set" == true ]]; then adb shell am clear-debug-app >/dev/null 2>&1 || true; fi
+      if [[ "$debugger_forward_set" == true ]]; then adb forward --remove "tcp:$port" >/dev/null 2>&1 || true; fi
+    }
+    trap cleanup EXIT
+    adb shell am force-stop "$package"
+    adb shell am set-debug-app -w "$package"
+    debugger_wait_set=true
+    adb shell am start -n "$activity"
+    app_pid=''
+    for attempt in {1..50}; do
+      app_pid="$(adb shell pidof -s "$package" | tr -d '\r')" || true
+      if [[ "$app_pid" =~ ^[0-9]+$ ]]; then break; fi
+      sleep 0.1
+    done
+    [[ "$app_pid" =~ ^[0-9]+$ ]] || { echo 'PoseGuard process did not start.' >&2; exit 1; }
+    adb forward --no-rebind "tcp:$port" "jdwp:$app_pid"
+    debugger_forward_set=true
+    jdb -sourcepath "$project/app/src/main/java:$project/app/src/offline/java:$project/app/src/online/java:$ANDROID_HOME/sources/android-37.0" -attach "localhost:$port"
+    ;;
+  profile)
+    physical_device
+    seconds="${1:-10}"
+    [[ "$seconds" =~ ^[0-9]+$ ]] && (( seconds >= 1 && seconds <= 300 )) || { echo 'Duration must be 1–300 seconds.' >&2; exit 2; }
+    trace_name="poseguard-$(date +%Y%m%d-%H%M%S).perfetto-trace"
+    remote="/data/misc/perfetto-traces/$trace_name"
+    adb shell perfetto -o "$remote" -t "${seconds}s" sched freq idle am wm gfx view camera
+    adb pull "$remote" "$workspace/artifacts/$trace_name"
+    adb shell rm "$remote"
+    ;;
+  adb) exec adb "$@" ;;
+  gradle) exec gradle -p "$project" "$@" ;;
+  *) usage >&2; exit 2 ;;
+esac

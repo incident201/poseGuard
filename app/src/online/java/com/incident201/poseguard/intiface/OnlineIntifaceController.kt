@@ -43,6 +43,7 @@ internal class OnlineIntifaceController : IntifaceController {
     private val clientLock = Any()
     private val searchDevicesMutex = Mutex()
     private val vibrationCommandMutex = Mutex()
+    private val vibrationTestMutex = Mutex()
     private val clientLifecycleMutex = Mutex()
     private val operationGeneration = AtomicLong(0L)
     private var client: ButtplugClientWSClient? = null
@@ -386,12 +387,12 @@ internal class OnlineIntifaceController : IntifaceController {
     }
 
     override suspend fun testVibration() = withContext(Dispatchers.IO) {
-        if (!vibrationCommandMutex.tryLock()) return@withContext
+        if (!vibrationTestMutex.tryLock()) return@withContext
 
         try {
-            runVibrationTestLocked()
+            vibrationCommandMutex.withLock { runVibrationTestLocked() }
         } finally {
-            vibrationCommandMutex.unlock()
+            vibrationTestMutex.unlock()
         }
     }
 
@@ -608,16 +609,26 @@ internal class OnlineIntifaceController : IntifaceController {
         }
     }
 
-    override fun selectDevice(device: IntifaceDeviceInfo) {
-        val availableDevice = mutableState.value.devices.firstOrNull { it.index == device.index } ?: return
-        mutableState.update { it.copy(
-            selectedDevice = availableDevice,
-            statusMessage = IntifaceUiMessage(
-                IntifaceMessage.SelectedDevice,
-                listOf(availableDevice.displayName)
-            ),
-            errorMessage = null
-        ) }
+    override suspend fun selectDevice(device: IntifaceDeviceInfo) = withContext(Dispatchers.IO) {
+        vibrationCommandMutex.withLock {
+            val generation = operationGeneration.get()
+            val current = mutableState.value
+            if (current.devices.none { it.index == device.index }) return@withLock
+            if (current.selectedDevice != null && current.selectedDevice.index != device.index) {
+                // Serialize the old device's stop with all vibration commands before changing routing.
+                runSessionVibrationCommand(0.0, stopDevice = true)
+                if (operationGeneration.get() != generation || mutableState.value.errorMessage != null) return@withLock
+            }
+            mutableState.update { state ->
+                val available = state.devices.firstOrNull { it.index == device.index }
+                if (operationGeneration.get() != generation || !state.isConnected || available == null) state
+                else state.copy(
+                    selectedDevice = available,
+                    statusMessage = IntifaceUiMessage(IntifaceMessage.SelectedDevice, listOf(available.displayName)),
+                    errorMessage = null
+                )
+            }
+        }
     }
 
     override fun disconnect() {

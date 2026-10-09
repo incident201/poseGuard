@@ -1,0 +1,83 @@
+{
+  "version": {
+    "major": 5,
+    "minor": 1
+  },
+  "user_configs": {
+    "protocols": {
+      "tcode-v03": {
+        "communication": [
+          {
+            "websocket": {
+              "name": "poseguard-test-a"
+            }
+          },
+          {
+            "websocket": {
+              "name": "poseguard-test-b"
+            }
+          }
+        ],
+        "configurations": [
+          {
+            "identifier": [
+              "poseguard-test-a"
+            ],
+            "name": "PoseGuard Test A (2 motors)",
+            "id": "f01d392f-bdcf-458b-a745-318767000001",
+            "features": [
+              {
+                "index": 0,
+                "description": "Test motor 0",
+                "id": "f01d392f-bdcf-458b-a745-318767000002",
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      100
+                    ]
+                  }
+                }
+              },
+              {
+                "index": 1,
+                "description": "Test motor 1",
+                "id": "f01d392f-bdcf-458b-a745-318767000003",
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      100
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "identifier": [
+              "poseguard-test-b"
+            ],
+            "name": "PoseGuard Test B (1 motor)",
+            "id": "f01d392f-bdcf-458b-a745-318767000004",
+            "features": [
+              {
+                "index": 0,
+                "description": "Test motor 0",
+                "id": "f01d392f-bdcf-458b-a745-318767000005",
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      100
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

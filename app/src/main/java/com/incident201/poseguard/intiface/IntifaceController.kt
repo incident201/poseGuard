@@ -90,7 +90,7 @@ interface IntifaceController {
     suspend fun testVibration()
     suspend fun setVibrationStrength(strength: Double)
     suspend fun stopVibration()
-    fun selectDevice(device: IntifaceDeviceInfo)
+    suspend fun selectDevice(device: IntifaceDeviceInfo)
     fun disconnect()
     suspend fun resetConnection()
     fun clearTransientMessages()

@@ -68,6 +68,9 @@ jobs:
       - name: Build Online Debug APK
         run: gradle :app:assembleOnlineDebug --no-daemon --stacktrace
 
+      - name: Compile instrumentation tests for both flavors
+        run: gradle :app:assembleOfflineDebugAndroidTest :app:assembleOnlineDebugAndroidTest --no-daemon --stacktrace
+
       - name: Rename APKs with Timestamp
         run: |
           TIMESTAMP=$(date +'%d%m%Y%H%M%S')
