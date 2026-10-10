@@ -17,6 +17,10 @@ pg verify                # все перечисленное + проверка 
 pg quick-test offline    # быстрые сценарии сессии и кодека на телефоне
 pg quick-test online     # те же сценарии + настоящий сервер Intiface и test device
 pg camera-smoke          # камера, MediaPipe, пересоздание Activity и timelapse сессии
+pg ui-test               # пользовательские пути через настоящую MainActivity
+pg release-audit         # production release APK (R8): статический аудит и запуск на телефоне
+pg release-test online   # те же сценарии на минифицированном release APK
+pg release-check         # весь release-контур для обоих flavor
 pg restart-test          # сохранённый прибор после настоящего force-stop приложения
 pg scenario offline 'SessionScenarioTest#slowDisplacementIsClassifiedAsDriftAndEmitsDriftCue' --no-build
 ```
@@ -77,6 +81,6 @@ export ANDROID_SERIAL=серийный_номер_из_pg_devices
 
 Установка повторяемая: существующие инструменты используются повторно, архивы проверяются по опубликованным контрольным суммам. Скрипт принимает лицензии SDK, устанавливает только перечисленные SDK-пакеты, прописывает локальный `sdk.dir` и восстанавливает debug keystore из файла репозитория, как CI. Gradle-кэш и Java toolchain находятся внутри `.tools/`; существующие пользовательские ADB-ключи используются без изменений. Debug keystore и `local.properties` игнорируются Git проекта.
 
-Release-подписание требует собственных `KEYSTORE_PATH`, `STORE_PASSWORD`, `KEY_PASSWORD`; окружение не создаёт release-ключи и не изменяет настройки подписания проекта.
+Release-подписание требует собственных `KEYSTORE_PATH`, `STORE_PASSWORD`, `KEY_PASSWORD`; окружение не создаёт настоящие release-ключи и не изменяет настройки подписания проекта. Для локальных проверок `pg release-*` подписывают сборки открытым debug-ключом репозитория под псевдонимом `upload` (хранилище `.tools/release-test.p12`, переменные задаются только внутри этих команд), поэтому release-сборка устанавливается поверх debug-сборки без потери данных.
 
 Версии соответствуют [требованиям AGP 9.4](https://developer.android.com/build/releases/agp-9-4-0-release-notes). Справка по [ADB](https://developer.android.com/tools/adb) и [scrcpy для Linux](https://github.com/Genymobile/scrcpy/blob/master/doc/linux.md).

@@ -6,7 +6,10 @@ flavor="${1:-offline}"
 suite="${2:-core}"
 build_option="${3:-}"
 test_filter="${4:-}"
+# POSEGUARD_BUILD_TYPE=release (set by `pg release-test`) runs the same suites against the R8-minified release APK.
+build_type="${POSEGUARD_BUILD_TYPE:-debug}"
 [[ "$flavor" == offline || "$flavor" == online ]] || { echo 'Choose offline or online.' >&2; exit 2; }
+[[ "$build_type" == debug || "$build_type" == release ]] || { echo 'POSEGUARD_BUILD_TYPE must be debug or release.' >&2; exit 2; }
 [[ -z "$build_option" || "$build_option" == --no-build ]] || { echo 'Optional flag: --no-build' >&2; exit 2; }
 [[ "$(adb get-state)" == device ]]
 [[ "$(adb shell getprop ro.kernel.qemu | tr -d '\r')" != 1 ]] || { echo 'Select a physical device.' >&2; exit 1; }
@@ -14,7 +17,9 @@ export ANDROID_SERIAL="$(adb get-serialno | tr -d '\r')"
 safe_serial="${ANDROID_SERIAL//[^A-Za-z0-9_.-]/_}"
 exec {device_lock_fd}> "$workspace/.tools/device-$safe_serial.lock"
 flock -n "$device_lock_fd" || { echo 'Another PoseGuard test is using this device.' >&2; exit 1; }
-output="$workspace/artifacts/device-$flavor-$suite-$(date +%Y%m%d-%H%M%S)"
+output_tag="$flavor-$suite"
+[[ "$build_type" == debug ]] || output_tag="$flavor-$suite-$build_type"
+output="$workspace/artifacts/device-$output_tag-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$output"
 lab_pid=''
 lab_started=false
@@ -43,7 +48,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ "$flavor" == online && "$suite" != camera ]]; then
+uses_lab=false
+[[ "$flavor" == online && "$suite" != camera && "$suite" != ui ]] && uses_lab=true
+if [[ "$uses_lab" == true ]]; then
   if curl -fsS --max-time 1 http://127.0.0.1:8787/health > "$output/health.json" 2>/dev/null; then
     python3 - "$output/health.json" <<'PY'
 import json,sys
@@ -70,32 +77,68 @@ PY
 fi
 
 capital_flavor="${flavor^}"
-if [[ "$build_option" != --no-build ]]; then
-  gradle -p "$workspace/poseGuard" ":app:assemble${capital_flavor}Debug" ":app:assemble${capital_flavor}DebugAndroidTest" --console=plain > "$output/build.log" 2>&1 || { tail -n 60 "$output/build.log" >&2; exit 1; }
+capital_build_type="${build_type^}"
+apk_dir="$workspace/poseGuard/app/build/outputs/apk"
+app_apk="$apk_dir/$flavor/$build_type/app-$flavor-$build_type.apk"
+test_apk="$apk_dir/androidTest/$flavor/$build_type/app-$flavor-$build_type-androidTest.apk"
+if [[ "$build_type" == release ]]; then
+  source "$workspace/tools/release-env.sh"
+  export POSEGUARD_TEST_KEEP_RULES="$workspace/tools/proguard/instrumentation-keep.pro"
+  gradle_args=(-I "$workspace/tools/gradle/release-tests.init.gradle")
+else
+  gradle_args=()
 fi
-adb install -r "$workspace/poseGuard/app/build/outputs/apk/$flavor/debug/app-$flavor-debug.apk"
-adb install -r "$workspace/poseGuard/app/build/outputs/apk/androidTest/$flavor/debug/app-$flavor-debug-androidTest.apk"
+if [[ "$build_option" != --no-build ]]; then
+  gradle -p "$workspace/poseGuard" "${gradle_args[@]}" ":app:assemble${capital_flavor}${capital_build_type}" ":app:assemble${capital_flavor}${capital_build_type}AndroidTest" --console=plain > "$output/build.log" 2>&1 || { tail -n 60 "$output/build.log" >&2; exit 1; }
+fi
+# Make sure the APK about to run really is the configuration under test.
+debuggable_flag="$(aapt2 dump badging "$app_apk" | grep -c '^application-debuggable' || true)"
+if [[ "$build_type" == release && "$debuggable_flag" != 0 ]]; then echo 'Release APK is debuggable; refusing to treat it as a release test.' >&2; exit 1; fi
+if [[ "$build_type" == debug && "$debuggable_flag" == 0 ]]; then echo 'Debug APK is not debuggable; stale build output?' >&2; exit 1; fi
+printf 'Build type under test: %s (%s)\n' "$build_type" "$app_apk" | tee "$output/build-type.txt"
+adb install -r "$app_apk"
+adb install -r "$test_apk"
+camera_class=com.incident201.poseguard.scenario.CameraSmokeTest
+ui_class=com.incident201.poseguard.scenario.AppFlowScenarioTest
 runner_args=()
 case "$suite" in
-  core) runner_args+=(-e notAnnotation androidx.test.filters.LargeTest) ;;
-  camera) runner_args+=(-e class com.incident201.poseguard.scenario.CameraSmokeTest) ;;
+  core|all) runner_args+=(-e notAnnotation androidx.test.filters.LargeTest) ;;
+  camera) runner_args+=(-e class "$camera_class") ;;
+  ui) runner_args+=(-e class "$ui_class") ;;
   intiface) runner_args+=(-e class com.incident201.poseguard.scenario.IntifaceControllerScenarioTest,com.incident201.poseguard.scenario.IntifaceSessionScenarioTest) ;;
   restart) runner_args+=(-e class "$restart_class") ;;
   scenario) [[ -n "$test_filter" ]] || { echo 'Test class is required.' >&2; exit 2; }; runner_args+=(-e class "$test_filter") ;;
   *) echo 'Unknown suite.' >&2; exit 2 ;;
 esac
-if [[ "$flavor" == online && "$suite" != camera ]]; then runner_args+=(-e poseguardIntiface true); fi
+if [[ "$uses_lab" == true ]]; then runner_args+=(-e poseguardIntiface true); fi
+run_started="$(adb shell "date '+%m-%d %H:%M:%S.000'" | tr -d '\r')"
 run_instrumentation() {
   local log="$1"
   shift
   adb shell am instrument -w -r "$@" com.incident201.poseguard.test/androidx.test.runner.AndroidJUnitRunner | tee "$log"
-  adb logcat -b crash -d -v threadtime > "$output/crashes.log"
-  python3 "$workspace/tools/check-instrumentation.py" "$log"
+  # The crash buffer is shared by every app on the phone; keep only what happened since this run began.
+  local crash_log="$output/crashes-$(basename "$log" .log).log" status=0
+  adb logcat -b crash -d -v threadtime -T "$run_started" > "$crash_log" || true
+  if grep -qE 'Process: com\.incident201\.poseguard|>>> com\.incident201\.poseguard|pid [0-9]+ \([^)]*poseguard[^)]*\)' "$crash_log"; then
+    echo "PoseGuard crashed during this run; see $crash_log" >&2
+    status=1
+  else
+    python3 "$workspace/tools/check-instrumentation.py" "$log" || status=$?
+  fi
+  if [[ "$status" != 0 ]]; then
+    # Everything that was logged since the run began, for diagnosing the failure afterwards.
+    adb logcat -d -v threadtime -T "$run_started" > "$output/logcat-$(basename "$log" .log).log" || true
+  fi
+  return "$status"
 }
-if [[ "$suite" != restart ]]; then
+if [[ "$suite" == all ]]; then
+  run_instrumentation "$output/instrumentation.log" "${runner_args[@]}"
+  run_instrumentation "$output/camera.log" -e class "$camera_class"
+  run_instrumentation "$output/ui.log" -e class "$ui_class"
+elif [[ "$suite" != restart ]]; then
   run_instrumentation "$output/instrumentation.log" "${runner_args[@]}"
 fi
-if [[ "$flavor" == online && ( "$suite" == core || "$suite" == intiface || "$suite" == restart ) ]]; then
+if [[ "$flavor" == online && ( "$suite" == core || "$suite" == all || "$suite" == intiface || "$suite" == restart ) ]]; then
   restart_pending=true
   for phase in prepare verify; do
     curl -fsS -X POST http://127.0.0.1:8787/reset >/dev/null

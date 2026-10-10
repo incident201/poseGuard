@@ -87,6 +87,9 @@ open class SessionFixture {
         PoseLandmarks.fromAllLandmarks(points)
     }
 
+    /** Default timing removes the stabilization and countdown waits; tests of those phases override it. */
+    internal open fun timing(): SessionTiming = SessionTiming(now::get, 0, 0)
+
     @Before fun createSessionFixture() {
         app = ApplicationProvider.getApplicationContext()
         val prefs = app.getSharedPreferences("game_settings", Context.MODE_PRIVATE)
@@ -94,12 +97,14 @@ open class SessionFixture {
         check(prefs.edit().clear().commit())
         now.set(SystemClock.elapsedRealtime())
         onMain {
-            model = GameViewModel(app, SessionTiming(now::get, 0, 0))
+            model = GameViewModel(app, timing())
             store.put("scenario", model)
             model.updateTimelapseRecordingEnabled(false)
             model.updateMinimumPenaltyIntervalSeconds(0)
         }
-        worker = GameViewModel::class.java.getDeclaredField("mediaPipeResultExecutor")
+        // Found by type rather than name so that the lookup also works after R8 renamed the field.
+        worker = GameViewModel::class.java.declaredFields
+            .single { ExecutorService::class.java.isAssignableFrom(it.type) }
             .apply { isAccessible = true }.get(model) as ExecutorService
         audioScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         audioScope.launch { model.audioCueEvents.collect { cues.add(it) } }
@@ -132,16 +137,27 @@ open class SessionFixture {
             model.startSession()
             assertEquals(GameState.WaitingForStabilization, model.gameState.value)
             frame(initialPose)
-            val sensorManager = app.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-            sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let { sensor ->
-                // SensorEvent has no public constructor; only the input event is synthetic.
-                val event = SensorEvent::class.java.getDeclaredConstructor(Int::class.javaPrimitiveType)
-                    .apply { isAccessible = true }.newInstance(3)
-                event.sensor = sensor
-                event.timestamp = now.get() * 1_000_000
-                model.onSensorChanged(event)
-            }
+            gyroscope(0f)
         }
+    }
+
+    /** Delivers a synthetic gyroscope sample (rad/s about X) at the current scenario time; call on the main thread. */
+    protected fun gyroscope(rate: Float) {
+        val sensorManager = app.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let { sensor ->
+            // SensorEvent has no public constructor; only the input event is synthetic.
+            val event = SensorEvent::class.java.getDeclaredConstructor(Int::class.javaPrimitiveType)
+                .apply { isAccessible = true }.newInstance(3)
+            event.sensor = sensor
+            event.timestamp = now.get() * 1_000_000
+            event.values[0] = rate
+            model.onSensorChanged(event)
+        }
+    }
+
+    /** Stops the real gyroscope from interleaving with synthetic samples; call on the main thread. */
+    protected fun detachRealGyroscope() {
+        (app.getSystemService(Context.SENSOR_SERVICE) as SensorManager).unregisterListener(model)
     }
 
     protected fun disappearUntilViolation() {
@@ -150,6 +166,16 @@ open class SessionFixture {
             frame(PoseLandmarks(), 200)
         }
         check(model.violationCount.value > 0) { "Missing pose never produced a violation" }
+    }
+
+    /** Restores the pose for a moment and then removes it until the violation counter reaches [count]. */
+    protected fun disappearUntilViolationCount(count: Int) {
+        repeat(3) { frame() }
+        repeat(40) {
+            if (model.gameState.value != GameState.HoldingPose || model.violationCount.value >= count) return
+            frame(PoseLandmarks(), 200)
+        }
+        check(model.violationCount.value >= count) { "Violation #$count never happened" }
     }
 
     protected fun translated(dx: Float) = PoseLandmarks.fromAllLandmarks(

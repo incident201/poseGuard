@@ -645,7 +645,9 @@ Tests live under:
 
 - `app/src/test/java/com/incident201/poseguard/`
 - `app/src/test/java/com/incident201/poseguard/tracker/`
+- `app/src/testOffline/java/com/incident201/poseguard/` and `app/src/testOnline/java/com/incident201/poseguard/` for flavor-specific JVM tests
 - `app/src/androidTest/java/com/incident201/poseguard/`
+- `app/src/androidTestOnline/java/com/incident201/poseguard/` for instrumentation tests of the online flavor
 
 When changing deterministic tracker logic, update or add JVM tests near the affected tracker class. When changing UI screenshots, update the relevant Roborazzi test or golden files if the repository uses them.
 

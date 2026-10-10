@@ -20,6 +20,11 @@ Usage: pg COMMAND [arguments]
   device-test [offline|online]   Instrumentation on a physical device
   quick-test [offline|online]    Fast scenarios via ADB; online includes Intiface
   camera-smoke [offline|online]  Real camera + MediaPipe + activity recreation
+  ui-test [offline|online]       User flows through the real MainActivity (onboarding, settings, start/stop)
+  release-test [FLAVOR] [SUITE]  Same suites on the R8-minified RELEASE APK; SUITE: all (default), core, camera, ui,
+                                intiface, restart. Add --no-build to reuse the APKs
+  release-audit [FLAVOR|both]    Build the production release APK, audit it statically, start it on the phone
+  release-check                 release-audit + release-test all for both flavors (the full release gate)
   intiface-test                 Controller and session signal integration tests
   restart-test                  Persisted Intiface selection after actual force-stop
   scenario FLAVOR CLASS[#TEST]   Run one scenario/class; optional --no-build
@@ -97,6 +102,21 @@ case "$command_name" in
     ;;
   quick-test) exec "$workspace/tools/device-test.sh" "${1:-offline}" core "${2:-}" ;;
   camera-smoke) exec "$workspace/tools/device-test.sh" "${1:-offline}" camera "${2:-}" ;;
+  ui-test) exec "$workspace/tools/device-test.sh" "${1:-offline}" ui "${2:-}" ;;
+  release-test)
+    flavor="${1:-offline}"
+    suite="${2:-all}"
+    build_option="${3:-}"
+    if [[ "$suite" == --no-build ]]; then suite=all; build_option=--no-build; fi
+    POSEGUARD_BUILD_TYPE=release exec "$workspace/tools/device-test.sh" "$flavor" "$suite" "$build_option"
+    ;;
+  release-audit) exec "$workspace/tools/release-audit.sh" "${1:-both}" ;;
+  release-check)
+    "$workspace/tools/release-audit.sh" both
+    for flavor in offline online; do
+      POSEGUARD_BUILD_TYPE=release "$workspace/tools/device-test.sh" "$flavor" all
+    done
+    ;;
   intiface-test) exec "$workspace/tools/device-test.sh" online intiface "${1:-}" ;;
   restart-test) exec "$workspace/tools/device-test.sh" online restart "${1:-}" ;;
   scenario)
