@@ -1,0 +1,17 @@
+// Init script for `pg release-test`: instrumentation tests are built against, installed on top of and run
+// in the minified release variant (R8, resource shrinking) instead of the debug one. The project's own
+// build files stay untouched; the default build still tests the debug variant.
+//
+// The shared test infrastructure needs a few classes the product never uses, so the APK under test gets one
+// extra R8 input (tools/proguard/instrumentation-keep.pro). Everything the project configured stays in force;
+// production APKs (`pg release-audit`) are built without this file.
+allprojects {
+    plugins.withId('com.android.application') {
+        def android = extensions.getByName('android')
+        android.testBuildType = 'release'
+        def extraRules = System.getenv('POSEGUARD_TEST_KEEP_RULES')
+        if (extraRules) {
+            android.buildTypes.getByName('release').proguardFile(extraRules)
+        }
+    }
+}

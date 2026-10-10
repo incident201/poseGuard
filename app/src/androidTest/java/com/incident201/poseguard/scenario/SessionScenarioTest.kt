@@ -61,6 +61,31 @@ class SessionScenarioTest : SessionFixture() {
         assertEquals(GameState.HoldingPose, model.gameState.value)
     }
 
+    @Test fun penaltiesFollowTheConfiguredTiersAndTheLastAllowedViolationEndsTheSession() {
+        onMain {
+            model.updateMaxViolations(5)
+            model.updateFirstViolationPenaltyMinutes(1)
+            model.updateSecondViolationPenaltyMinutes(2)
+            model.updateThirdViolationPenaltyMinutes(3)
+            model.updateSubsequentViolationPenaltyMinutes(4)
+        }
+        start(30)
+        var expectedSeconds = 30
+        listOf(1, 2, 3, 4).forEachIndexed { index, minutes ->
+            disappearUntilViolationCount(index + 1)
+            expectedSeconds += minutes * 60
+            val remaining = model.timerSeconds.value
+            // Only a few seconds of scenario time elapse; a wrong tier would be off by whole minutes.
+            assertTrue("Violation ${index + 1}: expected about $expectedSeconds s, got $remaining s",
+                remaining in (expectedSeconds - 25)..expectedSeconds)
+            assertEquals(GameState.HoldingPose, model.gameState.value)
+        }
+        disappearUntilViolationCount(5)
+        assertEquals(GameState.Failed, model.gameState.value)
+        assertEquals(5, model.sessionSummary.value!!.violationCounts.disappeared)
+        assertTrue(cues.any { it.cue == AudioCue.DefeatTryAgain })
+    }
+
     @Test fun movementRunsThroughStabilizerSmootherAndTracker() {
         onMain { model.updateMaxViolations(1) }
         start()

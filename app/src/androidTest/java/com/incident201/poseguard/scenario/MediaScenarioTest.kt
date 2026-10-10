@@ -79,7 +79,9 @@ class MediaScenarioTest {
     }
 }
 
-private fun recorderWorker(recorder: TimelapseRecorder) = TimelapseRecorder::class.java.getDeclaredField("frameExecutor")
+// Found by type rather than name so that the lookup also works after R8 renamed the field.
+private fun recorderWorker(recorder: TimelapseRecorder) = TimelapseRecorder::class.java.declaredFields
+    .single { ExecutorService::class.java.isAssignableFrom(it.type) }
     .apply { isAccessible = true }.get(recorder) as ExecutorService
 
 internal fun timelapseFiles(app: Application): List<File> =
