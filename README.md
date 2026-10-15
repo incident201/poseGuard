@@ -119,3 +119,7 @@ The application supports:
 ## Status
 
 This project is currently under development.
+
+## License
+
+PoseGuard is free software licensed under the [GNU General Public License v3.0](LICENSE) (SPDX: `GPL-3.0-only`).
