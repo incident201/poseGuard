@@ -1386,7 +1386,7 @@ private fun TtsTemplateSettingRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AudioCueSettingRow(
+internal fun AudioCueSettingRow(
     language: AppLanguage,
     cue: AudioCue,
     cueSettings: AudioCueSettings,
@@ -1497,7 +1497,7 @@ private fun AudioCueSettingRow(
 }
 
 @Composable
-private fun TtsPhraseSettingsDialog(
+internal fun TtsPhraseSettingsDialog(
     language: AppLanguage,
     template: TtsPhraseTemplate,
     initialCustomText: String?,
@@ -1574,7 +1574,7 @@ private fun TtsPhraseSettingsDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PcmSettingsDialog(
+internal fun PcmSettingsDialog(
     language: AppLanguage,
     initialSettings: PcmSignalSettings,
     onDismiss: () -> Unit,
@@ -1707,7 +1707,7 @@ private fun PcmSettingsDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EnumSettingField(
+internal fun EnumSettingField(
     label: String,
     value: String,
     expanded: Boolean,
@@ -1752,7 +1752,7 @@ private fun TtsVoiceMode.labelRes(): Int = when (this) {
     TtsVoiceMode.SystemVoice -> R.string.tts_voice_system
 }
 
-private fun AudioCue.ttsPhraseTemplate(): TtsPhraseTemplate = when (this) {
+internal fun AudioCue.ttsPhraseTemplate(): TtsPhraseTemplate = when (this) {
     AudioCue.PlaceDeviceStill -> TtsPhraseTemplate.PlaceDeviceStill
     AudioCue.TakePosition -> TtsPhraseTemplate.TakePosition
     AudioCue.TimeStartedHoldPosition -> TtsPhraseTemplate.TimeStartedHoldPosition
@@ -1765,7 +1765,7 @@ private fun AudioCue.ttsPhraseTemplate(): TtsPhraseTemplate = when (this) {
     AudioCue.FaceLookedAtCamera -> TtsPhraseTemplate.FaceLookedAtCamera
 }
 
-private fun TtsPhraseTemplate.defaultTextRes(): Int = when (this) {
+internal fun TtsPhraseTemplate.defaultTextRes(): Int = when (this) {
     TtsPhraseTemplate.PlaceDeviceStill -> R.string.place_device_still
     TtsPhraseTemplate.TakePosition -> R.string.take_position
     TtsPhraseTemplate.TimeStartedHoldPosition -> R.string.time_started_hold_position
@@ -1779,10 +1779,10 @@ private fun TtsPhraseTemplate.defaultTextRes(): Int = when (this) {
     TtsPhraseTemplate.PenaltyAddedToTimer -> R.string.penalty_added_to_timer_template
 }
 
-private fun isValidTtsTemplate(template: TtsPhraseTemplate, text: String): Boolean =
+internal fun isValidTtsTemplate(template: TtsPhraseTemplate, text: String): Boolean =
     template != TtsPhraseTemplate.PenaltyAddedToTimer || text.contains("{minutes}")
 
-private fun AudioCue.labelRes(): Int = when (this) {
+internal fun AudioCue.labelRes(): Int = when (this) {
     AudioCue.PlaceDeviceStill -> R.string.audio_cue_place_device_still
     AudioCue.TakePosition -> R.string.audio_cue_take_position
     AudioCue.TimeStartedHoldPosition -> R.string.audio_cue_time_started_hold_position
@@ -1795,7 +1795,7 @@ private fun AudioCue.labelRes(): Int = when (this) {
     AudioCue.FaceLookedAtCamera -> R.string.audio_cue_face_looked_at_camera
 }
 
-private fun AudioCueMode.labelRes(): Int = when (this) {
+internal fun AudioCueMode.labelRes(): Int = when (this) {
     AudioCueMode.UseTts -> R.string.audio_cue_mode_use_tts
     AudioCueMode.AudioFile -> R.string.audio_cue_mode_choose_audio_file
     AudioCueMode.Pcm -> R.string.audio_cue_mode_pcm
@@ -1815,7 +1815,7 @@ private fun PcmPattern.labelRes(): Int = when (this) {
 }
 
 @Composable
-private fun IntegerSettingField(
+internal fun IntegerSettingField(
     label: String,
     value: Int,
     onValueChanged: (Int) -> Unit,
@@ -1891,7 +1891,7 @@ private fun FloatSettingField(
 }
 
 @Composable
-private fun DoubleSettingField(
+internal fun DoubleSettingField(
     label: String,
     value: Double,
     onValueChanged: (Double) -> Unit,
@@ -1963,7 +1963,7 @@ private fun DoubleSettingField(
 }
 
 @Composable
-private fun IntifaceVibrationSettingsEditor(
+internal fun IntifaceVibrationSettingsEditor(
     language: AppLanguage,
     settings: IntifaceVibrationSettings,
     onChanged: (IntifaceVibrationSettings) -> Unit,
@@ -2140,7 +2140,7 @@ internal fun LanguageSelectorCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DriftToleranceDropdown(
+internal fun DriftToleranceDropdown(
     language: AppLanguage,
     selectedPreset: DriftTolerancePreset,
     onPresetSelected: (DriftTolerancePreset) -> Unit
@@ -2156,7 +2156,7 @@ private fun DriftToleranceDropdown(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MotionSensitivityDropdown(
+internal fun MotionSensitivityDropdown(
     language: AppLanguage,
     selectedPreset: MotionSensitivityPreset,
     onPresetSelected: (MotionSensitivityPreset) -> Unit
