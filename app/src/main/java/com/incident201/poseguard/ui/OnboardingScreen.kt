@@ -69,7 +69,6 @@ private sealed interface OnboardingPage {
     ) : OnboardingPage
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun OnboardingScreen(
     language: AppLanguage,
@@ -87,7 +86,50 @@ internal fun OnboardingScreen(
             add(OnboardingPage.ImageTips(R.drawable.slide_4, listOf(R.string.tip_9, R.string.tip_10), true))
         }
     }
-    val pagerState = rememberPagerState(pageCount = { pages.size })
+    GuidePager(
+        language = language,
+        pageCount = pages.size,
+        onSkip = null,
+        finishButton = {
+            Button(onClick = onFinished) {
+                Text(localizedString(language, R.string.onboarding_done))
+            }
+        },
+        modifier = modifier
+    ) { pageIndex, compact ->
+        when (val page = pages[pageIndex]) {
+            OnboardingPage.Language -> LanguageOnboardingPage(
+                language = language,
+                onLanguageChanged = onLanguageChanged,
+                colorScheme = MaterialTheme.colorScheme,
+                compact = compact,
+                modifier = Modifier.fillMaxSize()
+            )
+            is OnboardingPage.ImageTips -> ImageTipsOnboardingPage(
+                language = language,
+                page = page,
+                compact = compact,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+/**
+ * Pages with an indicator and Back / Next navigation, shared by the first-run onboarding and
+ * feature guides. [finishButton] replaces Next on the last page; [onSkip] adds a Skip action.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun GuidePager(
+    language: AppLanguage,
+    pageCount: Int,
+    onSkip: (() -> Unit)?,
+    finishButton: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    page: @Composable (index: Int, compact: Boolean) -> Unit
+) {
+    val pagerState = rememberPagerState(pageCount = { pageCount })
     val coroutineScope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
 
@@ -102,38 +144,34 @@ internal fun OnboardingScreen(
         val outerPadding = if (compact) 12.dp else 18.dp
         val sectionSpacing = if (compact) 10.dp else 14.dp
         val navHeight = if (compact) 42.dp else 48.dp
+        val lastPage = pagerState.currentPage == pageCount - 1
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = outerPadding, vertical = outerPadding)
         ) {
+            if (onSkip != null) {
+                Box(Modifier.fillMaxWidth().height(navHeight)) {
+                    if (!lastPage) {
+                        TextButton(onClick = onSkip, modifier = Modifier.align(Alignment.CenterEnd)) {
+                            Text(localizedString(language, R.string.guide_skip))
+                        }
+                    }
+                }
+            }
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
             ) { pageIndex ->
-                when (val page = pages[pageIndex]) {
-                    OnboardingPage.Language -> LanguageOnboardingPage(
-                        language = language,
-                        onLanguageChanged = onLanguageChanged,
-                        colorScheme = colorScheme,
-                        compact = compact,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    is OnboardingPage.ImageTips -> ImageTipsOnboardingPage(
-                        language = language,
-                        page = page,
-                        compact = compact,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                page(pageIndex, compact)
             }
 
             Spacer(Modifier.height(sectionSpacing))
             PageIndicator(
-                pageCount = pages.size,
+                pageCount = pageCount,
                 currentPage = pagerState.currentPage,
                 compact = compact,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -158,10 +196,8 @@ internal fun OnboardingScreen(
                     Spacer(Modifier.width(96.dp))
                 }
 
-                if (pagerState.currentPage == pages.lastIndex) {
-                    Button(onClick = onFinished) {
-                        Text(localizedString(language, R.string.onboarding_done))
-                    }
+                if (lastPage) {
+                    finishButton()
                 } else {
                     Button(
                         onClick = {
@@ -305,11 +341,12 @@ private fun BoxScope.ResultIconsOverlay(
 }
 
 @Composable
-private fun OnboardingTipsList(
+internal fun OnboardingTipsList(
     language: AppLanguage,
     tipIds: List<Int>,
     compact: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    titleId: Int? = null
 ) {
     Card(
         modifier = modifier,
@@ -320,6 +357,14 @@ private fun OnboardingTipsList(
             modifier = Modifier.padding(if (compact) 14.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)
         ) {
+            if (titleId != null) {
+                Text(
+                    text = localizedString(language, titleId),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = if (compact) 16.sp else 19.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             tipIds.forEach { tipId ->
                 Text(
                     text = "• ${localizedString(language, tipId)}",

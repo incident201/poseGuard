@@ -29,6 +29,7 @@ robolectric = "4.17"
 roborazzi = "1.76.0"
 mediapipeTasksVision = "1.1.1"
 buttplug4j = "3.1.180"
+zxingCore = "3.5.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -70,6 +71,7 @@ roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", versi
 roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
 roborazzi-junit-rule = { group = "io.github.takahirom.roborazzi", name = "roborazzi-junit-rule", version.ref = "roborazzi" }
 mediapipe-tasks-vision = { group = "com.google.mediapipe", name = "tasks-vision", version.ref = "mediapipeTasksVision" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
 buttplug4j-jetty-websocket = { group = "io.github.blackspherefollower", name = "buttplug4j.connectors.jetty.websocket.client", version.ref = "buttplug4j" }
 
 [plugins]

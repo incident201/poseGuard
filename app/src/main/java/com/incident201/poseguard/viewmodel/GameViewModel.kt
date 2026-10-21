@@ -8,6 +8,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.net.Uri
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
@@ -24,6 +25,25 @@ import com.incident201.poseguard.audio.PcmPattern
 import com.incident201.poseguard.audio.PcmSignalSettings
 import com.incident201.poseguard.audio.TtsPhraseTemplate
 import com.incident201.poseguard.audio.TtsVoiceMode
+import com.incident201.poseguard.challenge.ActiveChallenge
+import com.incident201.poseguard.challenge.AuthoredChallenge
+import com.incident201.poseguard.challenge.Blob
+import com.incident201.poseguard.challenge.ChallengeRules
+import com.incident201.poseguard.challenge.TimerSpec
+import com.incident201.poseguard.challenge.ChallengeFileError
+import com.incident201.poseguard.challenge.ChallengeFiles
+import com.incident201.poseguard.challenge.ChallengeReport
+import com.incident201.poseguard.challenge.ChallengeRepository
+import com.incident201.poseguard.challenge.ImportResult
+import com.incident201.poseguard.challenge.ChallengeSessionRecorder
+import com.incident201.poseguard.challenge.AudioAttachResult
+import com.incident201.poseguard.challenge.AudioClip
+import com.incident201.poseguard.challenge.ChallengeDraft
+import com.incident201.poseguard.challenge.SessionEndCause
+import com.incident201.poseguard.challenge.TraceViolationEvent
+import com.incident201.poseguard.challenge.TraceViolationType
+import com.incident201.poseguard.challenge.applyTo
+import com.incident201.poseguard.challenge.quantizedForTrace
 import com.incident201.poseguard.intiface.IntifaceBackgroundMode
 import com.incident201.poseguard.intiface.IntifaceDeviceInfo
 import com.incident201.poseguard.intiface.IntifaceUiState
@@ -55,10 +75,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -90,6 +115,7 @@ private const val PREF_ACCELERATION_MODE_AUTO_RESOLVED = "acceleration_mode_auto
 private const val PREF_ACCELERATION_MODE_VERSION_CODE = "acceleration_mode_version_code"
 private const val PREF_POSE_LANDMARKER_MODEL = "pose_landmarker_model"
 private const val PREF_ONBOARDING_COMPLETED = "onboarding_completed"
+private const val PREF_CHALLENGE_INTRO_COMPLETED = "challenge_intro_completed"
 private const val PREF_POSE_SMOOTHER_MIN_CUTOFF = "pose_smoother_min_cutoff"
 private const val PREF_POSE_SMOOTHER_BETA = "pose_smoother_beta"
 private const val PREF_POSE_SMOOTHER_DERIVATIVE_CUTOFF = "pose_smoother_derivative_cutoff"
@@ -290,6 +316,9 @@ data class SessionSummary(
     val stoppedByTechnicalError: Boolean = false
 )
 
+/** One-shot challenge notices for the UI. */
+enum class ChallengeMessage { IntifaceRequired, NoAttemptsLeft, ReportSaveFailed }
+
 class GameViewModel internal constructor(
     application: Application,
     private val sessionTiming: SessionTiming
@@ -364,11 +393,46 @@ class GameViewModel internal constructor(
         prefs.getBoolean(PREF_ONBOARDING_COMPLETED, false)
     )
     val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
+    private val _challengeIntroCompleted = MutableStateFlow(prefs.getBoolean(PREF_CHALLENGE_INTRO_COMPLETED, false))
+    /** Whether the challenge guide was shown; it comes before the challenges are first opened. */
+    val challengeIntroCompleted: StateFlow<Boolean> = _challengeIntroCompleted.asStateFlow()
     private val _sessionSummary = MutableStateFlow<SessionSummary?>(null)
     val sessionSummary: StateFlow<SessionSummary?> = _sessionSummary.asStateFlow()
 
+    val challengeRepository = ChallengeRepository(application.applicationContext)
+    private val _activeChallenge = MutableStateFlow<ActiveChallenge?>(null)
+    /** The accepted challenge whose rules the next sessions use. */
+    val activeChallenge: StateFlow<ActiveChallenge?> = _activeChallenge.asStateFlow()
+    private val _challengeReport = MutableStateFlow<ChallengeReport?>(null)
+    /** Report of the challenge session that just ended; cleared with the final screen. */
+    val challengeReport: StateFlow<ChallengeReport?> = _challengeReport.asStateFlow()
+    private val _challengeMessage = MutableStateFlow<ChallengeMessage?>(null)
+    val challengeMessage: StateFlow<ChallengeMessage?> = _challengeMessage.asStateFlow()
+    /** Settings sessions run with: the user's own, or the active challenge over them. */
+    val effectiveSettings: StateFlow<GameSettings> =
+        combine(_gameSettings, _activeChallenge) { settings, challenge ->
+            challenge?.let { it.spec.rules.applyTo(settings, it.audioFiles) } ?: settings
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, _gameSettings.value)
+    // Guarded by processingLock.
+    private var challengeRecorder: ChallengeSessionRecorder? = null
+    @Volatile private var sessionRulesCache: Triple<GameSettings, ActiveChallenge?, GameSettings>? = null
+
+    /** Rules of the running session, read on the result worker as well as on the main thread. */
+    private val sessionRules: GameSettings
+        get() {
+            val base = _gameSettings.value
+            val challenge = _activeChallenge.value
+            val cached = sessionRulesCache
+            if (cached != null && cached.first === base && cached.second === challenge) return cached.third
+            return (challenge?.let { it.spec.rules.applyTo(base, it.audioFiles) } ?: base).also {
+                sessionRulesCache = Triple(base, challenge, it)
+            }
+        }
+
     private var sessionInitialTimerSeconds = defaultDurationSeconds
     @Volatile private var sessionTimerMode = TimerMode.Exact
+    /** Random timers and challenges with an undisclosed duration count up instead of down. */
+    @Volatile private var sessionShowsElapsed = false
     private val sessionClock = SessionClock()
 
     private enum class PendingTerminalResult {
@@ -424,14 +488,10 @@ class GameViewModel internal constructor(
 
     private enum class RunMode { Background, Violation }
 
-    private var currentViolationCount = 0
-    private var lastPenaltyAtMs = 0L
-    private var consecutiveFaceFailFrames = 0
+    // Counters are guarded by processingLock; register() additionally runs under sessionTargetLock.
+    private val ruleEngine = SessionRuleEngine()
     // Guarded by processingLock; both unavailable statuses belong to the same outage.
     private var faceCheckUnavailableSinceMs: Long? = null
-    private val faceFailFramesThreshold = 5
-
-    private enum class RuleViolationType { Drift, Motion, PersonDisappeared, FaceNotMatchingMode }
 
 
     @Volatile private var localizedResources: Pair<AppLanguage, android.content.res.Resources>? = null
@@ -754,7 +814,7 @@ class GameViewModel internal constructor(
         _gameSettings.value = _gameSettings.value.copy(faceCheckMode = mode)
         prefs.edit().putString("face_mode", mode.name).apply()
         synchronized(processingLock) {
-            consecutiveFaceFailFrames = 0
+            ruleEngine.resetFaceFailFrames()
             faceCheckUnavailableSinceMs = null
         }
     }
@@ -765,7 +825,7 @@ class GameViewModel internal constructor(
         prefs.edit().putFloat(PREF_FACE_DETECTION_CONFIDENCE, normalized).apply()
         faceDetectorService.setMinDetectionConfidence(normalized)
         synchronized(processingLock) {
-            consecutiveFaceFailFrames = 0
+            ruleEngine.resetFaceFailFrames()
             faceCheckUnavailableSinceMs = null
         }
     }
@@ -947,6 +1007,11 @@ class GameViewModel internal constructor(
     fun markOnboardingCompleted() {
         _onboardingCompleted.value = true
         prefs.edit().putBoolean(PREF_ONBOARDING_COMPLETED, true).apply()
+    }
+
+    fun markChallengeIntroCompleted() {
+        _challengeIntroCompleted.value = true
+        prefs.edit().putBoolean(PREF_CHALLENGE_INTRO_COMPLETED, true).apply()
     }
 
     fun updatePenaltiesEnabled(enabled: Boolean) {
@@ -1226,7 +1291,7 @@ class GameViewModel internal constructor(
         intifaceBackgroundJob = null
         if (intifaceOverrideJob?.isActive == true) return
         val generation = nextIntifaceSignalGeneration()
-        val settings = _gameSettings.value
+        val settings = sessionRules
         if (_gameState.value != GameState.HoldingPose ||
             settings.intifaceBackgroundMode != IntifaceBackgroundMode.Vibration ||
             !isIntifaceRuntimeReady(settings)
@@ -1255,7 +1320,7 @@ class GameViewModel internal constructor(
         resumeBackgroundAfter: Boolean = true,
         requireHoldingPose: Boolean = true
     ) {
-        val settings = _gameSettings.value
+        val settings = sessionRules
         if (settings.intifaceViolationMode == IntifaceViolationMode.Off ||
             !isIntifaceRuntimeReady(settings)
         ) {
@@ -1642,14 +1707,19 @@ class GameViewModel internal constructor(
                     face = nextOverlayState.face
                 )
             }
-            if (updateFaceCheckAvailability(nextOverlayState.face.status)) return
+            // One clock reading per frame keeps penalty and outage decisions reproducible.
+            val now = sessionTiming.nowMs()
+            if (updateFaceCheckAvailability(nextOverlayState.face.status, now)) return
             val isHoldingPose = _gameState.value == GameState.HoldingPose
             if (!isHoldingPose) {
                 _poseOverlayState.value = nextOverlayState.copy(frozenLandmarkIndices = emptySet())
                 return
             }
 
-            val trackingPose = poseOcclusionGuard.applyForTracking(pose, timestamp)
+            val recorder = challengeRecorder
+            val guardedPose = poseOcclusionGuard.applyForTracking(pose, timestamp)
+            val trackingPose = if (recorder != null) guardedPose.quantizedForTrace() else guardedPose
+            recorder?.frame(timestamp, now, nextOverlayState.face.status, trackingPose)
             _poseOverlayState.value = nextOverlayState.copy(
                 frozenLandmarkIndices = poseOcclusionGuard.activeFrozenIndices()
             )
@@ -1657,8 +1727,8 @@ class GameViewModel internal constructor(
             if (!pose.hasEnoughKeypoints()) {
                 resetMovementGaugeState()
                 val trackingResult = movementTracker.trackFrame(trackingPose, timestamp)
-                if (handleMovementViolation(trackingResult.violation, pose)) return
-                processFaceRule(nextOverlayState.face.status, pose)
+                if (handleMovementViolation(trackingResult.violation, now)) return
+                processFaceRule(nextOverlayState.face.status, now)
                 return
             }
 
@@ -1671,91 +1741,71 @@ class GameViewModel internal constructor(
                 motionThresholdFactor = trackingResult.metrics.motionThresholdFactor
             )
 
-            if (handleMovementViolation(trackingResult.violation, pose)) return
+            if (handleMovementViolation(trackingResult.violation, now)) return
 
-            processFaceRule(nextOverlayState.face.status, pose)
+            processFaceRule(nextOverlayState.face.status, now)
         }
     }
 
-    private fun handleMovementViolation(violation: MovementTracker.Violation, pose: PoseLandmarks): Boolean {
-        return when (violation) {
-            is MovementTracker.Violation.DriftLimitExceeded -> handleRuleViolation(RuleViolationType.Drift, pose)
-            is MovementTracker.Violation.MotionLimitExceeded -> handleRuleViolation(RuleViolationType.Motion, pose)
-            is MovementTracker.Violation.PersonDisappeared -> handleRuleViolation(RuleViolationType.PersonDisappeared, pose)
-            else -> false
-        }
+    private fun handleMovementViolation(violation: MovementTracker.Violation, nowMs: Long): Boolean {
+        val type = violation.toRuleViolationType() ?: return false
+        return handleRuleViolation(type, nowMs)
     }
 
-    private fun updateFaceCheckAvailability(status: FaceDetectionStatus): Boolean {
-        if (_gameSettings.value.faceCheckMode == FaceCheckMode.Disabled ||
+    private fun updateFaceCheckAvailability(status: FaceDetectionStatus, nowMs: Long): Boolean {
+        if (sessionRules.faceCheckMode == FaceCheckMode.Disabled ||
             _gameState.value != GameState.HoldingPose
         ) {
             faceCheckUnavailableSinceMs = null
             return false
         }
-        if (stopIfFaceCheckTimedOut()) return true
+        if (stopIfFaceCheckTimedOut(nowMs)) return true
         when (status) {
             FaceDetectionStatus.Error, FaceDetectionStatus.NotProcessed -> {
                 if (faceCheckUnavailableSinceMs == null) {
-                    faceCheckUnavailableSinceMs = sessionTiming.nowMs()
+                    faceCheckUnavailableSinceMs = nowMs
                     Log.w(tag, "face_check_unavailable status=$status timeoutMs=$FACE_CHECK_UNAVAILABLE_TIMEOUT_MS")
                 }
             }
             FaceDetectionStatus.FaceVisible, FaceDetectionStatus.FaceNotVisible -> {
                 faceCheckUnavailableSinceMs?.let {
-                    Log.i(tag, "face_check_recovered elapsedMs=${sessionTiming.nowMs() - it}")
+                    Log.i(tag, "face_check_recovered elapsedMs=${nowMs - it}")
                 }
                 faceCheckUnavailableSinceMs = null
             }
         }
-        return stopIfFaceCheckTimedOut()
+        return stopIfFaceCheckTimedOut(nowMs)
     }
 
-    private fun stopIfFaceCheckTimedOut(): Boolean {
-        if (_gameSettings.value.faceCheckMode == FaceCheckMode.Disabled ||
+    private fun stopIfFaceCheckTimedOut(nowMs: Long = sessionTiming.nowMs()): Boolean {
+        if (sessionRules.faceCheckMode == FaceCheckMode.Disabled ||
             _gameState.value != GameState.HoldingPose
         ) {
             faceCheckUnavailableSinceMs = null
             return false
         }
         val since = faceCheckUnavailableSinceMs ?: return false
-        if (sessionTiming.nowMs() - since < FACE_CHECK_UNAVAILABLE_TIMEOUT_MS) return false
+        if (nowMs - since < FACE_CHECK_UNAVAILABLE_TIMEOUT_MS) return false
         if (!tryReserveSessionDefeat()) return false
-        Log.e(tag, "face_check_timeout elapsedMs=${sessionTiming.nowMs() - since}; session stopped without penalty")
+        Log.e(tag, "face_check_timeout elapsedMs=${nowMs - since}; session stopped without penalty")
         completeDefeatAfterReservation(
             reason = tr(R.string.face_check_unavailable),
-            stoppedByTechnicalError = true
+            stoppedByTechnicalError = true,
+            cause = SessionEndCause.FaceCheckUnavailable
         )
         return true
     }
 
-    private fun processFaceRule(status: FaceDetectionStatus, pose: PoseLandmarks) {
-        when (_gameSettings.value.faceCheckMode) {
-            FaceCheckMode.Disabled -> return
-            FaceCheckMode.FaceToCamera -> when (status) {
-                FaceDetectionStatus.FaceVisible -> consecutiveFaceFailFrames = 0
-                FaceDetectionStatus.FaceNotVisible -> checkFaceFail(pose)
-                FaceDetectionStatus.NotProcessed, FaceDetectionStatus.Error -> Unit
-            }
-            FaceCheckMode.FaceAwayFromCamera -> when (status) {
-                FaceDetectionStatus.FaceNotVisible -> consecutiveFaceFailFrames = 0
-                FaceDetectionStatus.FaceVisible -> checkFaceFail(pose)
-                FaceDetectionStatus.NotProcessed, FaceDetectionStatus.Error -> Unit
-            }
+    private fun processFaceRule(status: FaceDetectionStatus, nowMs: Long) {
+        if (ruleEngine.onFaceStatus(sessionRules.faceCheckMode, status)) {
+            handleRuleViolation(RuleViolationType.FaceNotMatchingMode, nowMs)
         }
     }
 
-    private fun checkFaceFail(pose: PoseLandmarks) {
-        consecutiveFaceFailFrames += 1
-        if (consecutiveFaceFailFrames >= faceFailFramesThreshold) {
-            consecutiveFaceFailFrames = 0
-            handleRuleViolation(RuleViolationType.FaceNotMatchingMode, pose)
-        }
-    }
-
-    private fun handleRuleViolation(type: RuleViolationType, pose: PoseLandmarks): Boolean {
-        val now = sessionTiming.nowMs()
-        if (lastPenaltyAtMs > 0L && now - lastPenaltyAtMs < _gameSettings.value.minimumPenaltyIntervalSeconds * 1000L) {
+    private fun handleRuleViolation(type: RuleViolationType, nowMs: Long): Boolean {
+        val rules = sessionRules
+        val config = SessionRuleConfig.from(rules)
+        if (ruleEngine.isRateLimited(nowMs, config)) {
             return false
         }
 
@@ -1765,27 +1815,36 @@ class GameViewModel internal constructor(
                 return false
             }
 
-            currentViolationCount += 1
-            _violationCount.value = currentViolationCount
-            updateRuleViolationCounts(type)
-            if (currentViolationCount >= _gameSettings.value.maxViolations) {
-                pendingTerminalResult = PendingTerminalResult.Defeat
-                terminalDefeatReason = when (type) {
-                    RuleViolationType.Drift -> tr(R.string.defeat_drift)
-                    RuleViolationType.Motion -> tr(R.string.defeat_motion)
-                    RuleViolationType.PersonDisappeared -> tr(R.string.defeat_disappeared)
-                    RuleViolationType.FaceNotMatchingMode ->
-                        if (_gameSettings.value.faceCheckMode == FaceCheckMode.FaceToCamera) {
-                            tr(R.string.defeat_face_not_to_camera)
-                        } else {
-                            tr(R.string.defeat_face_to_camera)
-                        }
+            val decision = ruleEngine.register(type, nowMs, config)
+            _violationCount.value = ruleEngine.violationCount
+            _ruleViolationCounts.value = ruleEngine.counts
+            when (decision) {
+                is SessionRuleEngine.Decision.Defeat -> {
+                    challengeRecorder?.violation(
+                        TraceViolationEvent(nowMs, type.toTraceType(), decision.violationIndex, 0, defeat = true)
+                    )
+                    pendingTerminalResult = PendingTerminalResult.Defeat
+                    terminalDefeatReason = when (type) {
+                        RuleViolationType.Drift -> tr(R.string.defeat_drift)
+                        RuleViolationType.Motion -> tr(R.string.defeat_motion)
+                        RuleViolationType.PersonDisappeared -> tr(R.string.defeat_disappeared)
+                        RuleViolationType.FaceNotMatchingMode ->
+                            if (rules.faceCheckMode == FaceCheckMode.FaceToCamera) {
+                                tr(R.string.defeat_face_not_to_camera)
+                            } else {
+                                tr(R.string.defeat_face_to_camera)
+                            }
+                    }
                 }
-            } else {
-                runOnMain { triggerIntifaceViolationEffect() }
-                applyPenalty(type, penaltyMinutesForViolation(currentViolationCount))
-                lastPenaltyAtMs = now
-                return false
+                is SessionRuleEngine.Decision.Penalty -> {
+                    challengeRecorder?.violation(
+                        TraceViolationEvent(nowMs, type.toTraceType(), decision.violationIndex, decision.minutes, defeat = false)
+                    )
+                    runOnMain { triggerIntifaceViolationEffect() }
+                    applyPenalty(type, decision.minutes)
+                    return false
+                }
+                SessionRuleEngine.Decision.Ignored -> return false
             }
         }
 
@@ -1797,40 +1856,32 @@ class GameViewModel internal constructor(
         }
         completeDefeatAfterReservation(
             terminalDefeatReason ?: return true,
-            preserveIntifaceOverride = true
+            preserveIntifaceOverride = true,
+            cause = SessionEndCause.TooManyViolations
         )
         return true
+    }
+
+    private fun RuleViolationType.toTraceType(): TraceViolationType = when (this) {
+        RuleViolationType.Drift -> TraceViolationType.Drift
+        RuleViolationType.Motion -> TraceViolationType.Motion
+        RuleViolationType.PersonDisappeared -> TraceViolationType.PersonDisappeared
+        RuleViolationType.FaceNotMatchingMode -> TraceViolationType.Face
     }
 
     private fun canAcceptRuleViolationLocked(): Boolean =
         _gameState.value == GameState.HoldingPose && pendingTerminalResult == null
 
-    private fun updateRuleViolationCounts(type: RuleViolationType) {
-        _ruleViolationCounts.value = when (type) {
-            RuleViolationType.Drift -> _ruleViolationCounts.value.copy(drift = _ruleViolationCounts.value.drift + 1)
-            RuleViolationType.Motion -> _ruleViolationCounts.value.copy(motion = _ruleViolationCounts.value.motion + 1)
-            RuleViolationType.FaceNotMatchingMode -> _ruleViolationCounts.value.copy(face = _ruleViolationCounts.value.face + 1)
-            RuleViolationType.PersonDisappeared -> _ruleViolationCounts.value.copy(disappeared = _ruleViolationCounts.value.disappeared + 1)
-        }
-    }
-
-    private fun resetRuleViolationCounts() {
+    private fun resetRuleCounters() {
+        ruleEngine.reset()
+        _violationCount.value = 0
         _ruleViolationCounts.value = RuleViolationCounts()
-    }
-
-    private fun penaltyMinutesForViolation(violationIndex: Int): Int {
-        val settings = _gameSettings.value
-        return when (violationIndex) {
-            1 -> settings.firstViolationPenaltyMinutes
-            2 -> settings.secondViolationPenaltyMinutes
-            3 -> settings.thirdViolationPenaltyMinutes
-            else -> settings.subsequentViolationPenaltyMinutes
-        }.coerceIn(0, 9999)
     }
 
     private fun applyPenalty(type: RuleViolationType, minutes: Int) {
         val sec = minutes * 60
-        val penaltyApplied = _gameSettings.value.penaltiesEnabled && sec > 0
+        val rules = sessionRules
+        val penaltyApplied = rules.penaltiesEnabled && sec > 0
         if (penaltyApplied) {
             synchronized(sessionTargetLock) {
                 if (_gameState.value == GameState.HoldingPose &&
@@ -1848,13 +1899,13 @@ class GameViewModel internal constructor(
             } else {
                 tr(R.string.face_rule_violated)
             }
-            val prefixTemplate = if (_gameSettings.value.faceCheckMode == FaceCheckMode.FaceToCamera) {
+            val prefixTemplate = if (rules.faceCheckMode == FaceCheckMode.FaceToCamera) {
                 TtsPhraseTemplate.FaceTurnedAway
             } else {
                 TtsPhraseTemplate.FaceLookedAtCamera
             }
             _statusMessage.value = statusText
-            val cue = if (_gameSettings.value.faceCheckMode == FaceCheckMode.FaceToCamera) {
+            val cue = if (rules.faceCheckMode == FaceCheckMode.FaceToCamera) {
                 AudioCue.FaceTurnedAway
             } else {
                 AudioCue.FaceLookedAtCamera
@@ -1892,7 +1943,7 @@ class GameViewModel internal constructor(
         timestamp: Long,
         identityDebugText: String
     ): PoseOverlayState {
-        val settings = _gameSettings.value
+        val settings = sessionRules
         if (settings.faceCheckMode == FaceCheckMode.Disabled && !settings.debugModeEnabled) {
             return buildOverlayStateWithoutFace(pose, bitmap.width, bitmap.height, identityDebugText)
         }
@@ -2052,10 +2103,11 @@ class GameViewModel internal constructor(
         }
     }
 
-    private fun tryReserveSessionDefeat(): Boolean = synchronized(sessionTargetLock) {
+    private fun tryReserveSessionDefeat(includeStabilization: Boolean = false): Boolean = synchronized(sessionTargetLock) {
         val canReserveDefeat = when (_gameState.value) {
             GameState.HoldingPose,
             GameState.StartingDelay -> true
+            GameState.WaitingForStabilization -> includeStabilization
             else -> false
         }
 
@@ -2084,6 +2136,7 @@ class GameViewModel internal constructor(
             violationCounts = _ruleViolationCounts.value,
             settings = sessionSettingsSnapshot
         )
+        finishChallengeSession(SessionEndCause.Completed)
         _gameState.value = GameState.Success
         faceCheckUnavailableSinceMs = null
         stopIntifaceSessionSignals()
@@ -2094,7 +2147,7 @@ class GameViewModel internal constructor(
 
     private fun updateSessionTimerLocked(): Boolean {
         val snapshot = sessionClock.snapshot(sessionTiming.nowMs())
-        _timerSeconds.value = if (sessionTimerMode == TimerMode.Random) {
+        _timerSeconds.value = if (sessionShowsElapsed) {
             snapshot.elapsedSeconds
         } else {
             snapshot.remainingSeconds
@@ -2136,17 +2189,38 @@ class GameViewModel internal constructor(
     fun startSession() = synchronized(processingLock) {
         if (_gameState.value != GameState.Idle && _gameState.value != GameState.Failed && _gameState.value != GameState.Success) return@synchronized
 
+        val challenge = _activeChallenge.value?.spec
+        val rules = sessionRules
+        if (challenge != null && challenge.rules.intifaceRequired && !isIntifaceRuntimeReady(rules)) {
+            _challengeMessage.value = ChallengeMessage.IntifaceRequired
+            return@synchronized
+        }
+        val attempt = if (challenge != null) {
+            challengeRepository.beginAttempt(challenge) ?: run {
+                _challengeMessage.value = ChallengeMessage.NoAttemptsLeft
+                return@synchronized
+            }
+        } else {
+            0
+        }
+
         _sessionSummary.value = null
-        sessionTimerMode = _timerMode.value
+        _challengeReport.value = null
+        val timer = challenge?.rules?.timer
+        sessionTimerMode = timer?.mode ?: _timerMode.value
         sessionInitialTimerSeconds = if (sessionTimerMode == TimerMode.Random) {
-            val minSeconds = _randomMinDurationSeconds.value
-            val maxSeconds = _randomMaxDurationSeconds.value.coerceAtLeast(minSeconds)
+            val minSeconds = timer?.randomMinSeconds ?: _randomMinDurationSeconds.value
+            val maxSeconds = (timer?.randomMaxSeconds ?: _randomMaxDurationSeconds.value).coerceAtLeast(minSeconds)
             Random.nextLong(minSeconds.toLong(), maxSeconds.toLong() + 1L).toInt()
         } else {
-            _selectedDurationSeconds.value
+            timer?.exactSeconds ?: _selectedDurationSeconds.value
         }
-        sessionSettingsSnapshot = _gameSettings.value
-        _timerSeconds.value = if (sessionTimerMode == TimerMode.Exact) sessionInitialTimerSeconds else 0
+        sessionShowsElapsed = sessionTimerMode == TimerMode.Random ||
+            (challenge != null && !challenge.visibility.showDuration)
+        sessionSettingsSnapshot = rules
+        // Settings edited while a challenge waited may have retuned the engines.
+        applySettingsToEngines(rules)
+        _timerSeconds.value = if (sessionShowsElapsed) 0 else sessionInitialTimerSeconds
         _defeatReason.value = ""
         resetMovementGaugeState()
         _startDelayRemainingSeconds.value = 0
@@ -2157,12 +2231,17 @@ class GameViewModel internal constructor(
             poseSmoother.reset()
             poseOcclusionGuard.reset()
             resetPoseDropoutHoldState()
-            currentViolationCount = 0
-            _violationCount.value = 0
-            resetRuleViolationCounts()
-            lastPenaltyAtMs = 0L
-            consecutiveFaceFailFrames = 0
+            resetRuleCounters()
             faceCheckUnavailableSinceMs = null
+            challengeRecorder = challenge?.let {
+                ChallengeSessionRecorder(
+                    spec = it,
+                    attempt = attempt,
+                    appVersion = BuildConfig.VERSION_NAME,
+                    startedAtMonoMs = sessionTiming.nowMs(),
+                    startedAtWallMs = System.currentTimeMillis()
+                )
+            }
             synchronized(sessionTargetLock) {
                 sessionClock.reset(sessionInitialTimerSeconds)
                 pendingTerminalResult = null
@@ -2211,27 +2290,37 @@ class GameViewModel internal constructor(
             val analyzedFrame = getFreshAnalyzedFrame(1200)
             val initialPose = analyzedFrame?.pose
             if (analyzedFrame == null) { triggerDefeat(tr(R.string.camera_no_frame)); return@launch }
-            if (initialPose == null || !initialPose.hasEnoughKeypoints()) { triggerDefeat(tr(R.string.camera_no_body)); return@launch }
-            _timerSeconds.value = if (sessionTimerMode == TimerMode.Exact) sessionInitialTimerSeconds else 0
+            if (initialPose == null || !initialPose.hasEnoughKeypoints()) {
+                triggerDefeat(tr(R.string.camera_no_body), cause = SessionEndCause.CameraNoBody)
+                return@launch
+            }
+            _timerSeconds.value = if (sessionShowsElapsed) 0 else sessionInitialTimerSeconds
+            val clockStartedAtMs = sessionTiming.nowMs()
             synchronized(sessionTargetLock) {
-                sessionClock.start(sessionTiming.nowMs())
+                sessionClock.start(clockStartedAtMs)
             }
             synchronized(processingLock) {
                 processingGeneration += 1
                 movementTracker.reset()
-                currentViolationCount = 0
-                _violationCount.value = 0
-                resetRuleViolationCounts()
-                lastPenaltyAtMs = 0L
-                consecutiveFaceFailFrames = 0
+                resetRuleCounters()
                 poseOcclusionGuard.finishCalibration(
                     referencePose = initialPose,
                     referenceTimestampMs = analyzedFrame.timestampMs
                 )
+                val recorder = challengeRecorder
                 val guardedInitialPose = poseOcclusionGuard.buildReferencePose(initialPose)
+                    .let { if (recorder != null) it.quantizedForTrace() else it }
                 movementTracker.startTracking(guardedInitialPose)
+                recorder?.startTrace(
+                    referenceTimestampMs = analyzedFrame.timestampMs,
+                    reference = guardedInitialPose,
+                    clockStartedAtMs = clockStartedAtMs,
+                    initialFaceStatus = analyzedFrame.face.status,
+                    imageWidth = analyzedFrame.imageWidth,
+                    imageHeight = analyzedFrame.imageHeight
+                )
                 _gameState.value = GameState.HoldingPose
-                updateFaceCheckAvailability(analyzedFrame.face.status)
+                updateFaceCheckAvailability(analyzedFrame.face.status, clockStartedAtMs)
             }
             _statusMessage.value = tr(R.string.time_started_hold_position)
             startTimerLoop()
@@ -2280,19 +2369,27 @@ class GameViewModel internal constructor(
 
     private fun resetMovementGaugeState() { _movementGaugeState.value = MovementGaugeState() }
 
-    fun triggerDefeat(reason: String, preserveIntifaceOverride: Boolean = false) {
+    fun triggerDefeat(reason: String, preserveIntifaceOverride: Boolean = false) =
+        triggerDefeat(reason, preserveIntifaceOverride, SessionEndCause.CameraNoFrame)
+
+    private fun triggerDefeat(
+        reason: String,
+        preserveIntifaceOverride: Boolean = false,
+        cause: SessionEndCause
+    ) {
         synchronized(processingLock) {
-            if (!tryReserveSessionDefeat()) {
+            if (!tryReserveSessionDefeat(includeStabilization = cause == SessionEndCause.Surrendered)) {
                 return
             }
-            completeDefeatAfterReservation(reason, preserveIntifaceOverride)
+            completeDefeatAfterReservation(reason, preserveIntifaceOverride, cause = cause)
         }
     }
 
     private fun completeDefeatAfterReservation(
         reason: String,
         preserveIntifaceOverride: Boolean = false,
-        stoppedByTechnicalError: Boolean = false
+        stoppedByTechnicalError: Boolean = false,
+        cause: SessionEndCause
     ) {
         runOnMain {
             if (preserveIntifaceOverride) {
@@ -2330,6 +2427,7 @@ class GameViewModel internal constructor(
             defeatReason = reason,
             stoppedByTechnicalError = stoppedByTechnicalError
         )
+        finishChallengeSession(cause)
         _gameState.value = GameState.Failed
         _defeatReason.value = reason
         _statusMessage.value = tr(if (stoppedByTechnicalError) R.string.session_stopped else R.string.check_failed)
@@ -2353,7 +2451,7 @@ class GameViewModel internal constructor(
     }
 
     private fun ttsText(template: TtsPhraseTemplate): String =
-        _gameSettings.value.customTtsTemplates[template]
+        sessionRules.customTtsTemplates[template]
             ?.takeIf { it.isNotBlank() }
             ?: defaultTtsTemplateText(template)
 
@@ -2364,13 +2462,205 @@ class GameViewModel internal constructor(
         _audioCueEvents.tryEmit(AudioCueEvent(cue, ttsText))
     }
 
+    /** Builds the challenge report once a challenge session has a result, and keeps it on disk. */
+    private fun finishChallengeSession(cause: SessionEndCause) = synchronized(processingLock) {
+        val recorder = challengeRecorder ?: return@synchronized
+        challengeRecorder = null
+        val intifaceState = intifaceController.state.value
+        val endedAtMs = sessionTiming.nowMs()
+        val report = recorder.finish(
+            endCause = cause,
+            endedAtMonoMs = endedAtMs,
+            endedAtWallMs = System.currentTimeMillis(),
+            initialTimerSeconds = sessionInitialTimerSeconds,
+            actualTimerSeconds = synchronized(sessionTargetLock) { sessionClock.snapshot(endedAtMs).elapsedSeconds },
+            counts = _ruleViolationCounts.value,
+            intifaceConnected = intifaceState.isConnected && intifaceState.selectedDevice != null
+        )
+        _challengeReport.value = report
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { challengeRepository.saveOutgoingReport(report) }.onFailure {
+                Log.e(tag, "Unable to store challenge report", it)
+                _challengeMessage.value = ChallengeMessage.ReportSaveFailed
+            }
+        }
+    }
+
+    /** Starts using [challengeId]'s rules for the next sessions. Returns false when it is unknown. */
+    suspend fun acceptChallenge(challengeId: Blob): Boolean {
+        val challenge = withContext(Dispatchers.IO) {
+            challengeRepository.runnableChallenge(challengeId)?.let { spec ->
+                ActiveChallenge(spec, challengeRepository.audioFiles(spec))
+            }
+        } ?: return false
+        synchronized(processingLock) {
+            if (_gameState.value !in setOf(GameState.Idle, GameState.Failed, GameState.Success)) return false
+            _activeChallenge.value = challenge
+            if (_gameState.value == GameState.Idle) updateIdleTimerDisplay()
+        }
+        return true
+    }
+
+    private val _challengeDraft = MutableStateFlow(ChallengeDraft(authorName = challengeRepository.executorName))
+    /** The challenge open in the editor; kept until it is created or reset. */
+    val challengeDraft: StateFlow<ChallengeDraft> = _challengeDraft.asStateFlow()
+
+    fun updateChallengeDraft(transform: (ChallengeDraft) -> ChallengeDraft) {
+        _challengeDraft.update(transform)
+    }
+
+    /** Starts a new draft with default rules. */
+    fun resetChallengeDraft() {
+        _challengeDraft.value = ChallengeDraft(authorName = challengeRepository.executorName)
+    }
+
+    /**
+     * Replaces the draft's rules with the user's current settings and duration, reading the
+     * audio files picked in the settings. Files that are unreadable or too large are dropped
+     * and those cues fall back to the spoken phrase.
+     */
+    suspend fun copySettingsIntoDraft() {
+        val settings = _gameSettings.value
+        val timer = TimerSpec(
+            mode = _timerMode.value,
+            exactSeconds = _selectedDurationSeconds.value,
+            randomMinSeconds = _randomMinDurationSeconds.value,
+            randomMaxSeconds = _randomMaxDurationSeconds.value
+        )
+        val clips = withContext(Dispatchers.IO) {
+            if (!settings.customizeAudioEnabled) return@withContext emptyMap()
+            var total = 0
+            settings.audioCueSettings.mapNotNull { (cue, cueSettings) ->
+                val uri = cueSettings.audioFileUri?.takeIf { cueSettings.mode == AudioCueMode.AudioFile }
+                    ?: return@mapNotNull null
+                val clip = readAudioClip(Uri.parse(uri)) ?: return@mapNotNull null
+                if (total + clip.data.size > AudioClip.MAX_TOTAL_BYTES) return@mapNotNull null
+                total += clip.data.size
+                cue to clip
+            }.toMap()
+        }
+        val rules = ChallengeRules.from(settings, timer, clips)
+        _challengeDraft.update { it.copy(rules = rules.copy(intifaceRequired = it.rules.intifaceRequired && rules.usesIntiface)) }
+    }
+
+    /** Embeds the audio file at [uri] for [cue] in the draft. */
+    suspend fun attachDraftAudio(cue: AudioCue, uri: Uri): AudioAttachResult {
+        val clip = withContext(Dispatchers.IO) { readAudioClip(uri) }
+            ?: return if (withContext(Dispatchers.IO) { audioSize(uri) } > AudioClip.MAX_BYTES) AudioAttachResult.TooLarge
+            else AudioAttachResult.Unreadable
+        var result = AudioAttachResult.Attached
+        _challengeDraft.update { draft ->
+            result = AudioAttachResult.Attached
+            val others = draft.rules.audioClips - cue
+            if (others.values.sumOf { it.data.size } + clip.data.size > AudioClip.MAX_TOTAL_BYTES) {
+                result = AudioAttachResult.TotalTooLarge
+                return@update draft
+            }
+            val cueSettings = draft.rules.audioCueSettings[cue] ?: AudioCueSettings()
+            draft.copy(
+                rules = draft.rules.copy(
+                    audioCueSettings = draft.rules.audioCueSettings + (cue to cueSettings.copy(mode = AudioCueMode.AudioFile)),
+                    audioClips = others + (cue to clip)
+                )
+            )
+        }
+        return result
+    }
+
+    private fun readAudioClip(uri: Uri): AudioClip? = runCatching {
+        val resolver = getApplication<Application>().contentResolver
+        val bytes = resolver.openInputStream(uri)?.use { it.readBounded(AudioClip.MAX_BYTES) }
+            ?.takeIf { it.isNotEmpty() } ?: return null
+        AudioClip(resolver.getType(uri)?.take(AudioClip.MAX_MIME_LENGTH) ?: "audio/*", Blob(bytes))
+    }.getOrNull()
+
+    private fun audioSize(uri: Uri): Long = runCatching {
+        getApplication<Application>().contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+    }.getOrNull() ?: -1L
+
+    /** Creates a challenge from the draft and starts a new draft. */
+    suspend fun createChallenge(draft: ChallengeDraft): AuthoredChallenge = withContext(Dispatchers.IO) {
+        challengeRepository.executorName = draft.authorName
+        challengeRepository.createChallenge(
+            title = draft.title,
+            description = draft.description,
+            authorName = draft.authorName,
+            rules = draft.rules.copy(intifaceRequired = draft.rules.intifaceRequired && draft.rules.usesIntiface),
+            visibility = draft.visibility,
+            attemptsAllowed = draft.attemptsAllowed
+        )
+    }.also { resetChallengeDraft() }
+
+    /** Returns to the user's own rules. */
+    fun leaveChallenge() = synchronized(processingLock) {
+        if (_gameState.value !in setOf(GameState.Idle, GameState.Failed, GameState.Success)) return@synchronized
+        _activeChallenge.value = null
+        applySettingsToEngines(_gameSettings.value)
+        if (_gameState.value == GameState.Idle) updateIdleTimerDisplay()
+    }
+
+    fun consumeChallengeMessage() {
+        _challengeMessage.value = null
+    }
+
+    private val _importResult = MutableStateFlow<ImportResult?>(null)
+    /** Outcome of the last opened challenge file, report file or pasted code. */
+    val importResult: StateFlow<ImportResult?> = _importResult.asStateFlow()
+
+    fun importChallengeFromUri(uri: Uri) {
+        viewModelScope.launch {
+            _importResult.value = withContext(Dispatchers.IO) {
+                val bytes = runCatching {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBounded(ChallengeFiles.MAX_INFLATED_BYTES)
+                    }
+                }.getOrNull()
+                if (bytes == null) ImportResult.Failed(ChallengeFileError.NotAChallengeFile)
+                else challengeRepository.import(bytes)
+            }
+        }
+    }
+
+    fun importChallengeFromText(text: String) {
+        viewModelScope.launch {
+            _importResult.value = withContext(Dispatchers.IO) {
+                challengeRepository.import(text.toByteArray(Charsets.UTF_8))
+            }
+        }
+    }
+
+    fun consumeImportResult() {
+        _importResult.value = null
+    }
+
+    private fun updateIdleTimerDisplay() {
+        val challenge = _activeChallenge.value?.spec
+        _timerSeconds.value = when {
+            challenge == null -> if (_timerMode.value == TimerMode.Exact) _selectedDurationSeconds.value else 0
+            challenge.rules.timer.mode == TimerMode.Exact && challenge.visibility.showDuration -> challenge.rules.timer.exactSeconds
+            else -> 0
+        }
+    }
+
     fun dismissFinalScreen() = synchronized(processingLock) {
         if (_gameState.value == GameState.Success || _gameState.value == GameState.Failed) {
+            _challengeReport.value = null
             stopSession()
         }
     }
 
     fun stopSession() = synchronized(processingLock) {
+        // Stopping a running challenge is a surrender: it ends with a result and a report.
+        if (challengeRecorder != null && _gameState.value in setOf(
+                GameState.WaitingForStabilization,
+                GameState.StartingDelay,
+                GameState.HoldingPose
+            )
+        ) {
+            triggerDefeat(tr(R.string.challenge_surrendered), cause = SessionEndCause.Surrendered)
+            return@synchronized
+        }
+        challengeRecorder = null
         faceCheckUnavailableSinceMs = null
         startDelayJob?.cancel()
         timerJob?.cancel()
@@ -2387,11 +2677,7 @@ class GameViewModel internal constructor(
             movementTracker.reset()
             poseOcclusionGuard.reset()
             resetPoseDropoutHoldState()
-            currentViolationCount = 0
-            _violationCount.value = 0
-            resetRuleViolationCounts()
-            lastPenaltyAtMs = 0L
-            consecutiveFaceFailFrames = 0
+            resetRuleCounters()
         }
         synchronized(sessionTargetLock) {
             pendingTerminalResult = null
@@ -2401,7 +2687,7 @@ class GameViewModel internal constructor(
         _gameState.value = GameState.Idle
         _statusMessage.value = tr(R.string.status_initial)
         _defeatReason.value = ""
-        _timerSeconds.value = if (_timerMode.value == TimerMode.Exact) _selectedDurationSeconds.value else 0
+        updateIdleTimerDisplay()
         stopIntifaceSessionSignals()
     }
     override fun onCleared() {
@@ -2441,4 +2727,16 @@ class GameViewModel internal constructor(
 
 private fun Bitmap.recycleIfNeeded() {
     if (!isRecycled) recycle()
+}
+
+/** Returns null for streams longer than [maxBytes], so a huge shared file cannot exhaust memory. */
+private fun java.io.InputStream.readBounded(maxBytes: Int): ByteArray? {
+    val out = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(64 * 1024)
+    while (true) {
+        val n = read(buffer)
+        if (n < 0) return out.toByteArray()
+        out.write(buffer, 0, n)
+        if (out.size() > maxBytes) return null
+    }
 }

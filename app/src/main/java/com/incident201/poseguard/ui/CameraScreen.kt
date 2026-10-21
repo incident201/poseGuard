@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -79,7 +80,11 @@ import com.incident201.poseguard.tracker.AccelerationMode
 import com.incident201.poseguard.tracker.AccelerationState
 import com.incident201.poseguard.tracker.Point3D
 import com.incident201.poseguard.tracker.PoseLandmarkerService
+import com.incident201.poseguard.challenge.ChallengeFiles
+import com.incident201.poseguard.challenge.ChallengeSpec
+import com.incident201.poseguard.challenge.QrCodes
 import com.incident201.poseguard.viewmodel.AppLanguage
+import com.incident201.poseguard.viewmodel.ChallengeMessage
 import com.incident201.poseguard.viewmodel.FaceCheckMode
 import com.incident201.poseguard.viewmodel.GameSettings
 import com.incident201.poseguard.viewmodel.GameState
@@ -123,34 +128,6 @@ private enum class TimelapseUiState { Preparing, Ready, Saving, Saved, Unavailab
 private fun localeFor(language: AppLanguage): Locale =
     language.locale
 
-private val POSE_CONNECTIONS = listOf(
-    11 to 12,
-    11 to 13,
-    13 to 15,
-    15 to 17,
-    15 to 19,
-    15 to 21,
-    17 to 19,
-    12 to 14,
-    14 to 16,
-    16 to 18,
-    16 to 20,
-    16 to 22,
-    18 to 20,
-    11 to 23,
-    12 to 24,
-    23 to 24,
-    23 to 25,
-    25 to 27,
-    27 to 29,
-    27 to 31,
-    29 to 31,
-    24 to 26,
-    26 to 28,
-    28 to 30,
-    28 to 32,
-    30 to 32
-)
 
 
 @Composable
@@ -213,6 +190,20 @@ fun CameraScreen(
     val ruleViolationCounts by viewModel.ruleViolationCounts.collectAsState()
     val sessionSummary by viewModel.sessionSummary.collectAsState()
     val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
+    val effectiveSettings by viewModel.effectiveSettings.collectAsState()
+    val activeChallenge by viewModel.activeChallenge.collectAsState()
+    val challengeReport by viewModel.challengeReport.collectAsState()
+    val challengeMessage by viewModel.challengeMessage.collectAsState()
+    val importResult by viewModel.importResult.collectAsState()
+    var challengePage by remember { mutableStateOf<ChallengePage?>(null) }
+    val challengeIntroCompleted by viewModel.challengeIntroCompleted.collectAsState()
+    // The first visit, from the button or a file opened in a messenger, starts with the guide.
+    val openChallengePage = { page: ChallengePage ->
+        challengePage = if (challengeIntroCompleted) page else ChallengePage.Intro(page)
+    }
+    var challengeRefresh by remember { mutableIntStateOf(0) }
+    var scanningQr by remember { mutableStateOf(false) }
+    var showSendReport by remember { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showOnboarding by rememberSaveable { mutableStateOf(!onboardingCompleted) }
     var onboardingIncludesLanguage by rememberSaveable { mutableStateOf(!onboardingCompleted) }
@@ -256,10 +247,43 @@ fun CameraScreen(
         }
     }
 
-    AudioCueAnnouncer(viewModel = viewModel, settings = gameSettings)
+    // Challenge sessions play the author's phrases and signals and switch debug tools off.
+    AudioCueAnnouncer(viewModel = viewModel, settings = effectiveSettings)
     val currentGameState = rememberUpdatedState(gameState)
-    val currentTimelapseRecordingEnabled = rememberUpdatedState(gameSettings.timelapseRecordingEnabled)
-    val debugModeEnabled = gameSettings.debugModeEnabled
+    val currentTimelapseRecordingEnabled = rememberUpdatedState(effectiveSettings.timelapseRecordingEnabled)
+    val debugModeEnabled = effectiveSettings.debugModeEnabled
+    val currentScanningQr = rememberUpdatedState(scanningQr)
+    val qrFrameCounter = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+    val onQrDecoded = rememberUpdatedState { text: String ->
+        if (scanningQr) {
+            scanningQr = false
+            viewModel.importChallengeFromText(text)
+        }
+    }
+    val sessionIdle = gameState == GameState.Idle || gameState == GameState.Failed || gameState == GameState.Success
+    val importFeedbackText = importResult?.let { importFeedback(gameSettings.language, it) }
+    LaunchedEffect(importResult) {
+        val (text, page) = importFeedbackText ?: return@LaunchedEffect
+        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+        challengeRefresh += 1
+        if (page != null && sessionIdle) {
+            showSettings = false
+            scanningQr = false
+            openChallengePage(page)
+        }
+        viewModel.consumeImportResult()
+    }
+    val challengeMessageText = when (challengeMessage) {
+        ChallengeMessage.IntifaceRequired -> localizedString(gameSettings.language, R.string.challenge_msg_intiface_required)
+        ChallengeMessage.NoAttemptsLeft -> localizedString(gameSettings.language, R.string.challenge_msg_no_attempts)
+        ChallengeMessage.ReportSaveFailed -> localizedString(gameSettings.language, R.string.challenge_msg_report_save_failed)
+        null -> null
+    }
+    LaunchedEffect(challengeMessage) {
+        challengeMessageText ?: return@LaunchedEffect
+        Toast.makeText(context, challengeMessageText, Toast.LENGTH_LONG).show()
+        viewModel.consumeChallengeMessage()
+    }
     val currentViolationCount = rememberUpdatedState(violationCount)
     val coroutineScope = rememberCoroutineScope()
     val timelapseRecorder = remember(context) { TimelapseRecorder(context.applicationContext) }
@@ -771,6 +795,11 @@ fun CameraScreen(
                             violationsText = currentViolationsCounterText.value
                         )
                     }
+                    if (currentScanningQr.value && qrFrameCounter.incrementAndGet() % 4 == 0) {
+                        QrCodes.decode(pipelineBitmap)
+                            ?.takeIf { ChallengeFiles.fromTextCode(it) != null }
+                            ?.let { text -> ContextCompat.getMainExecutor(context).execute { onQrDecoded.value(text) } }
+                    }
                     submitFrameToPosePipeline(
                         bitmap = pipelineBitmap,
                         viewModel = viewModel,
@@ -831,6 +860,25 @@ fun CameraScreen(
         }
     }
     BackHandler(enabled = showSettings) { showSettings = false }
+    BackHandler(enabled = scanningQr) { scanningQr = false }
+
+    val currentChallengePage = challengePage
+    if (currentChallengePage != null && canOpenSettings) {
+        ChallengeFlow(
+            viewModel = viewModel,
+            language = gameSettings.language,
+            page = currentChallengePage,
+            refreshKey = challengeRefresh,
+            onNavigate = { challengePage = it },
+            onScanQr = {
+                challengePage = null
+                qrFrameCounter.set(0)
+                scanningQr = true
+            },
+            modifier = modifier
+        )
+        return
+    }
 
     if (showSettings) {
         SettingsScreen(
@@ -907,6 +955,12 @@ fun CameraScreen(
                     FinalSessionScreen(
                         summary = sessionSummary!!,
                         language = gameSettings.language,
+                        challenge = activeChallenge?.spec,
+                        onSendReport = if (challengeReport != null) {
+                            { showSendReport = true }
+                        } else {
+                            null
+                        },
                         pendingTimelapseFile = pendingTimelapseFile,
                         timelapseUiState = timelapseUiState,
                         onSaveTimelapse = {
@@ -981,6 +1035,31 @@ fun CameraScreen(
                         }
                     )
                 }
+            }
+
+            if (scanningQr && !showFinalScreen) {
+                QrScanOverlay(
+                    language = gameSettings.language,
+                    onCancel = { scanningQr = false },
+                    modifier = Modifier
+                        .matchParentSize()
+                        .zIndex(6f)
+                )
+            }
+
+            val challengeSpec = activeChallenge?.spec
+            // Between sessions only: during one the movement gauge uses the same corner.
+            if (challengeSpec != null && sessionIdle && !showFinalScreen && !scanningQr) {
+                ActiveChallengeBanner(
+                    language = gameSettings.language,
+                    title = challengeSpec.title,
+                    onOpen = { if (canOpenSettings) openChallengePage(ChallengePage.Brief(challengeSpec.id)) },
+                    onLeave = viewModel::leaveChallenge,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 64.dp)
+                        .zIndex(4f)
+                )
             }
 
             if (canSwitchCamera) {
@@ -1090,6 +1169,13 @@ fun CameraScreen(
 
 
         // 3. Bottom Controls HUD
+        val hudChallenge = activeChallenge?.spec
+        val hudTimerMode = when {
+            hudChallenge == null -> timerMode
+            hudChallenge.rules.timer.mode == TimerMode.Exact && hudChallenge.visibility.showDuration -> TimerMode.Exact
+            // Shows ??:??:?? until the session starts.
+            else -> TimerMode.Random
+        }
         BottomHUDEngine(
             language = gameSettings.language,
             gameState = gameState,
@@ -1097,8 +1183,8 @@ fun CameraScreen(
             statusMessage = statusMessage,
             defeatReason = defeatReason,
             timerSeconds = timerSeconds,
-            selectedDurationSeconds = selectedDurationSeconds,
-            timerMode = timerMode,
+            selectedDurationSeconds = hudChallenge?.rules?.timer?.exactSeconds ?: selectedDurationSeconds,
+            timerMode = hudTimerMode,
             randomMinDurationSeconds = randomMinDurationSeconds,
             randomMaxDurationSeconds = randomMaxDurationSeconds,
             startDelayRemainingSeconds = startDelayRemainingSeconds,
@@ -1119,7 +1205,20 @@ fun CameraScreen(
             onSettingsClick = { if (canOpenSettings) showSettings = true },
             startEnabled = !(isFinalState && isTimelapseSaving),
             onStart = startFromFinalScreen,
-            onStop = { viewModel.stopSession() }
+            onStop = { viewModel.stopSession() },
+            timerEditable = hudChallenge == null,
+            onChallengesClick = { if (canOpenSettings) openChallengePage(ChallengePage.Hub()) }
+        )
+    }
+
+    val reportToSend = challengeReport
+    if (showSendReport && reportToSend != null) {
+        SendReportDialog(
+            viewModel = viewModel,
+            language = gameSettings.language,
+            report = reportToSend,
+            challengeTitle = activeChallenge?.spec?.title.orEmpty(),
+            onDismiss = { showSendReport = false }
         )
     }
 }
@@ -1295,6 +1394,8 @@ private fun PoseDebugSaveButton(
 private fun FinalSessionScreen(
     summary: SessionSummary,
     language: AppLanguage,
+    challenge: ChallengeSpec?,
+    onSendReport: (() -> Unit)?,
     pendingTimelapseFile: File?,
     timelapseUiState: TimelapseUiState,
     onSaveTimelapse: () -> Unit,
@@ -1346,13 +1447,14 @@ private fun FinalSessionScreen(
                     }
 
                     Spacer(Modifier.height(20.dp))
+                    val durationShown = challenge == null || challenge.visibility.showDuration
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         FinalMetricCard(
                             label = localizedString(language, R.string.final_initial_timer),
-                            value = formatDurationHms(summary.initialTimerSeconds),
+                            value = if (durationShown) formatDurationHms(summary.initialTimerSeconds) else "??:??:??",
                             modifier = Modifier.weight(1f)
                         )
                         FinalMetricCard(
@@ -1483,6 +1585,23 @@ private fun FinalSessionScreen(
                         }
                     }
 
+                    if (onSendReport != null) {
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = onSendReport,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("send_report_button"),
+                            shape = RoundedCornerShape(18.dp)
+                        ) {
+                            Text(
+                                text = localizedString(language, R.string.challenge_send_report),
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+
                     Spacer(Modifier.height(20.dp))
                     Button(
                         onClick = onClose,
@@ -1496,6 +1615,77 @@ private fun FinalSessionScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+        }
+    }
+}
+
+@Composable
+private fun QrScanOverlay(language: AppLanguage, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(240.dp)
+                .border(3.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(24.dp))
+        )
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = Color.Black.copy(alpha = 0.7f),
+            contentColor = Color.White
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    localizedString(language, R.string.challenge_scan_hint),
+                    fontSize = 14.sp,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = onCancel) {
+                    Text(localizedString(language, R.string.cancel), color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveChallengeBanner(
+    language: AppLanguage,
+    title: String,
+    onOpen: () -> Unit,
+    onLeave: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.testTag("active_challenge_banner"),
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.68f),
+        contentColor = Color.White
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                localizedFormatString(language, R.string.challenge_active, title),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clickable(onClick = onOpen)
+                    .padding(vertical = 10.dp)
+            )
+            TextButton(onClick = onLeave) {
+                Text(localizedString(language, R.string.challenge_leave), color = Color(0xFF8FD3FF))
+            }
         }
     }
 }
@@ -1884,41 +2074,16 @@ private fun DrawScope.drawPoseDebugOverlay(
 
     if (!SHOW_POSE_DEBUG_POINTS) return
 
-    fun shouldDrawPosePoint(point: Point3D): Boolean {
-        return point.x.isFinite() &&
-            point.y.isFinite() &&
-            point.presence?.let { it >= 0.5f } != false
-    }
-
-    fun posePointColor(index: Int): Color {
-        return if (index in overlayState.frozenLandmarkIndices) {
-            Color(0xFFFF9800)
-        } else {
-            Color.Cyan
+    drawPoseSkeleton(
+        landmarks = overlayState.landmarks,
+        connections = POSE_CONNECTIONS,
+        map = { point -> Offset(mapX(point.x), mapY(point.y)) },
+        boneColor = Color.Cyan.copy(alpha = 0.65f),
+        jointColor = { index ->
+            if (index in overlayState.frozenLandmarkIndices) Color(0xFFFF9800).copy(alpha = 0.85f)
+            else Color.Cyan.copy(alpha = 0.85f)
         }
-    }
-
-    POSE_CONNECTIONS.forEach { (startIndex, endIndex) ->
-        val start = overlayState.landmarks.getOrNull(startIndex) ?: return@forEach
-        val end = overlayState.landmarks.getOrNull(endIndex) ?: return@forEach
-        if (!shouldDrawPosePoint(start) || !shouldDrawPosePoint(end)) return@forEach
-
-        drawLine(
-            color = Color.Cyan.copy(alpha = 0.65f),
-            start = Offset(mapX(start.x), mapY(start.y)),
-            end = Offset(mapX(end.x), mapY(end.y)),
-            strokeWidth = 2.5f
-        )
-    }
-
-    overlayState.landmarks.forEachIndexed { index, point ->
-        if (!shouldDrawPosePoint(point)) return@forEachIndexed
-        drawCircle(
-            color = posePointColor(index).copy(alpha = 0.85f),
-            radius = 4f,
-            center = Offset(mapX(point.x), mapY(point.y))
-        )
-    }
+    )
 }
 
 @Composable
@@ -1991,7 +2156,10 @@ fun BottomHUDEngine(
     onSettingsClick: () -> Unit,
     startEnabled: Boolean = true,
     onStart: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    /** False while a challenge sets the duration. */
+    timerEditable: Boolean = true,
+    onChallengesClick: (() -> Unit)? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val canStart = gameState == GameState.Idle || gameState == GameState.Failed || gameState == GameState.Success
@@ -2311,6 +2479,20 @@ fun BottomHUDEngine(
                         )
                     }
                 }
+                if (onChallengesClick != null) {
+                    FilledTonalIconButton(
+                        onClick = onChallengesClick,
+                        enabled = canOpenSettings,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("challenges_button")
+                    ) {
+                        Icon(
+                            Icons.Default.EmojiEvents,
+                            contentDescription = localizedString(language, R.string.challenges_title)
+                        )
+                    }
+                }
                 FilledTonalIconButton(
                     onClick = onSettingsClick,
                     enabled = canOpenSettings,
@@ -2350,7 +2532,7 @@ fun BottomHUDEngine(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                     ) {
-                        if (canStart && timerMode == TimerMode.Exact) {
+                        if (canStart && timerEditable && timerMode == TimerMode.Exact) {
                             TimerStepButton(
                                 symbol = "−",
                                 enabled = selectedDurationSeconds > 60,
@@ -2377,7 +2559,7 @@ fun BottomHUDEngine(
                                 .weight(1f)
                                 .testTag("timer_display")
                                 .then(
-                                    if (canStart) {
+                                    if (canStart && timerEditable) {
                                         Modifier.clickable { openTimerSheet() }
                                     } else {
                                         Modifier
@@ -2385,7 +2567,7 @@ fun BottomHUDEngine(
                                 )
                         )
 
-                        if (canStart && timerMode == TimerMode.Exact) {
+                        if (canStart && timerEditable && timerMode == TimerMode.Exact) {
                             TimerStepButton(
                                 symbol = "+",
                                 enabled = true,

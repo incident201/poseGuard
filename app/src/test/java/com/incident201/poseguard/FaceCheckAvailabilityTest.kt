@@ -8,7 +8,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.incident201.poseguard.audio.AudioCueEvent
 import com.incident201.poseguard.intiface.*
 import com.incident201.poseguard.tracker.FaceDetectionStatus
-import com.incident201.poseguard.tracker.PoseLandmarks
 import com.incident201.poseguard.viewmodel.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,8 +56,9 @@ class FaceCheckAvailabilityTest {
         .apply { isAccessible = true }.invoke(model)
 
     private fun observe(status: FaceDetectionStatus): Boolean =
-        GameViewModel::class.java.getDeclaredMethod("updateFaceCheckAvailability", FaceDetectionStatus::class.java)
-            .apply { isAccessible = true }.invoke(model, status) as Boolean
+        GameViewModel::class.java.getDeclaredMethod(
+            "updateFaceCheckAvailability", FaceDetectionStatus::class.java, Long::class.javaPrimitiveType
+        ).apply { isAccessible = true }.invoke(model, status, SystemClock.elapsedRealtime()) as Boolean
 
     private fun hold(mode: FaceCheckMode = FaceCheckMode.FaceToCamera, seconds: Int = 60) {
         model.updateFaceCheckMode(mode)
@@ -83,7 +83,10 @@ class FaceCheckAvailabilityTest {
     }
 
     @Test fun continuousErrorStopsAtFiveSecondsWithoutAddingPenaltyOrErasingPreviousViolations() {
-        field("currentViolationCount").setInt(model, 2)
+        val engine = field("ruleEngine").get(model) as SessionRuleEngine
+        val config = SessionRuleConfig.from(model.gameSettings.value.copy(maxViolations = 99))
+        engine.register(RuleViolationType.Drift, 0L, config)
+        engine.register(RuleViolationType.FaceNotMatchingMode, 0L, config)
         state<Int>("_violationCount").value = 2
         state<RuleViolationCounts>("_ruleViolationCounts").value = RuleViolationCounts(drift = 1, face = 1)
         observe(FaceDetectionStatus.Error)
@@ -144,11 +147,11 @@ class FaceCheckAvailabilityTest {
 
     @Test fun notVisibleRemainsARegularFaceRuleResultNotATechnicalError() {
         val process = GameViewModel::class.java.getDeclaredMethod(
-            "processFaceRule", FaceDetectionStatus::class.java, PoseLandmarks::class.java
+            "processFaceRule", FaceDetectionStatus::class.java, Long::class.javaPrimitiveType
         ).apply { isAccessible = true }
         repeat(5) {
             assertFalse(observe(FaceDetectionStatus.FaceNotVisible))
-            process.invoke(model, FaceDetectionStatus.FaceNotVisible, PoseLandmarks())
+            process.invoke(model, FaceDetectionStatus.FaceNotVisible, SystemClock.elapsedRealtime())
         }
         assertEquals(1, model.ruleViolationCounts.value.face)
         assertEquals(1, model.violationCount.value)
