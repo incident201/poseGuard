@@ -144,8 +144,6 @@
     <string name="challenge_penalty_interval_value">Abstand %1$d s</string>
     <string name="guide_skip">Überspringen</string>
     <string name="challenge_intro_help">So funktionieren Aufgaben</string>
-    <string name="challenge_intro_author">Autor</string>
-    <string name="challenge_intro_executor">Ausführender</string>
     <string name="challenge_intro_to_hub">Zu den Aufgaben</string>
     <string name="challenge_intro_open">Öffnen</string>
     <string name="challenge_intro_title_1">Ein Spiel zu zweit</string>
@@ -166,5 +164,4 @@
     <string name="challenge_intro_tip_5a">Senden Sie den Bericht mit einer Schaltfläche an den Autor. Nur der Autor kann ihn öffnen.</string>
     <string name="challenge_intro_tip_5b">Er enthält das Ergebnis, den Verlauf der Verstöße und eine Wiedergabe der Bewegungen.</string>
     <string name="challenge_intro_tip_5c">PoseGuard berechnet den Bericht nach und zeigt, ob das Ergebnis bestätigt ist.</string>
-    <string name="challenge_intro_file_only">nur als Datei</string>
 </resources>
