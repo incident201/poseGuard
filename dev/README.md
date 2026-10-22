@@ -14,6 +14,6 @@ PoseGuardDev/
   poseGuard/      # this repository
 ```
 
-To recreate this layout, place this checkout in a folder named `poseGuard` and copy the contents of `dev/workspace/` into its parent folder. An already configured workspace has this done.
+To recreate this layout, place this checkout in a folder named `poseGuard` and copy the contents of `dev/workspace/` into its parent folder.
 
-Setup, debugging and commands are described in the [environment README](workspace/README.md); scenarios and results are in [TESTING.md](workspace/TESTING.md). The logs and snapshots mentioned in the results stay as local artifacts and are not part of the repository.
+Setup, debugging and commands are described in the [environment README](workspace/README.md); device scenarios are in [TESTING.md](workspace/TESTING.md). Logs, screenshots and reports go to `artifacts/` and are not part of the repository.

@@ -1,6 +1,6 @@
 # PoseGuard environment without Android Studio
 
-All tools are installed locally in `.tools/`; the project source is in `poseGuard/`. The system PATH and shell settings are not changed. Android Studio, the Android Emulator and virtual device images are not installed in this environment. Access to an already connected USB device works without sudo.
+`tools/setup.sh` installs all tools locally into `.tools/`; the project source is expected in `poseGuard/`. The system PATH and shell settings are not changed, and no sudo is needed. Android Studio, the Android Emulator and virtual device images are not installed: tests run on a physical phone over ADB.
 
 ## Usage
 
@@ -56,9 +56,9 @@ If several devices are connected, select one:
 export ANDROID_SERIAL=serial_number_from_pg_devices
 ```
 
-On a new phone, enable USB debugging in Developer options and allow the computer's RSA key. For Wi-Fi, use `pg adb pair IP:PORT` and `pg adb connect IP:PORT`; the phone shows the addresses and pairing code. If USB is unavailable because of permissions, on CachyOS/Arch the system package `android-udev` installs the matching udev rules; the current tested configuration does not need it.
+On a new phone, enable USB debugging in Developer options and allow the computer's RSA key. For Wi-Fi, use `pg adb pair IP:PORT` and `pg adb connect IP:PORT`; the phone shows the addresses and pairing code. On Linux, if the device is not accessible over USB because of permissions, install your distribution's Android udev rules (for example, the `android-udev` package on Arch-based systems).
 
-For Intiface checks, the Intiface Engine 5.0.4 server is installed, which is the backend of Intiface Central. `pg intiface` starts the server, two virtual devices (A: two motors, B: one motor) and a recorder of each device's commands. In another terminal use `pg adb reverse tcp:12345 tcp:12345`, and `ws://127.0.0.1:12345` in the online app. `pg intiface-test` runs the connect, disconnect, switch, selection-restore and signal checks automatically. The Intiface Central GUI is not installed. Scenarios and coverage limits are described in [TESTING.md](TESTING.md).
+For Intiface checks, setup installs the Intiface Engine 5.0.4 server, which is the backend of Intiface Central. `pg intiface` starts the server, two virtual devices (A: two motors, B: one motor) and a recorder of each device's commands. In another terminal use `pg adb reverse tcp:12345 tcp:12345`, and `ws://127.0.0.1:12345` in the online app. `pg intiface-test` runs the connect, disconnect, switch, selection-restore and signal checks automatically. The Intiface Central GUI is not installed. Scenarios and coverage limits are described in [TESTING.md](TESTING.md).
 
 ## Components and setup
 

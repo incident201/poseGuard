@@ -175,16 +175,6 @@ The fast scenarios do not replace checks of vision accuracy, the real gyroscope,
 
 GitHub Actions keeps running JVM tests, lint and R8 for both flavors; compiling the instrumentation APKs has been added to CI. Running on a physical phone is done through this bench; a regular CI check would need a separate runner with a connected test phone.
 
-## Verified in this environment
+## Known issues
 
-Pixel 10 Pro XL, Android 17 / API 37, USB ADB.
-
-**Static checks.** `verify` with a forced rerun of all tasks succeeded: 101 JVM tests in offline and 100 in online (one existing ignored screenshot each), lint, debug and AndroidTest APKs, R8 for both flavors. New JVM tests: `SettingsPersistenceTest` (defaults, saving each setting, migrations, corrupted values, range clamping; the test fails if a field is added to `GameSettings` that it does not check), `OfflineFlavorTest` (offline has no network permissions, the Intiface stub does not connect) and `OnlineFlavorTest`. Disabling saving of one setting in `GameViewModel` and removing a call from `customize()` each make these tests fail; the source code was restored after the check.
-
-**Debug on the phone.** Baseline run before the changes: 19 offline scenarios, 41 online scenarios including device restore after force-stop, camera and timelapse on both flavors. After adding scenarios: offline `core` 29 of 29, `ui` 4 of 4. The new stabilization scenarios were checked for sensitivity: if movement does not reset the stillness timer, `movementRestartsTheStillnessPeriod` fails.
-
-**Release (R8) on the phone.** `pg release-audit both`: all static checks of the production APK passed for offline and online; both APKs launch on the phone and stay alive; MediaPipe processes frames. `pg release-test`: offline `core` 29 of 29, `camera` 2 of 2, `ui` 4 of 4 (6 consecutive repeats without failures); online `all`: 51 `core` scenarios, `camera` 2, `ui` 4 and the three phases of the restart check, all passed. The installed APK is not debuggable (`flags=0x0`); app classes are obfuscated according to `mapping.txt`.
-
-**Known observation.** In one of the first release `all` runs for offline, the process crashed with `SIGBUS (BUS_ADRERR)` in `libmediapipe_tasks_jni.so`, thread `drishti`, 6 seconds after process start, in the first-launch UI scenario right after the APK was installed. It could not be reproduced: 3 repeats of `ui`, 3 repeats of the `camera` and `ui` pair and a following full online run passed without failures. The cause is unknown; an access far outside the mapped buffer points to a native MediaPipe problem or to file mapping from the APK, not to the Java layer. If it happens again, the script now saves `crashes-*.log` and `logcat-*.log` for the time of the run.
-
-Logs of this check in `artifacts/`: `verify-final-20261010.log`, `release-offline-all.log`, `release-online-all.log`, `release-audit-run2.log`, `mutation-buttplug.log`, `mutation-mediapipe.log`; per-run data is in `artifacts/device-*` and `artifacts/release-audit-*`.
+A release `all` run for offline once crashed with `SIGBUS (BUS_ADRERR)` in `libmediapipe_tasks_jni.so` (thread `drishti`) a few seconds after process start, in the first-launch UI scenario right after the APK was installed. It has not been reproduced in repeated `ui`, `camera` and full runs. The cause is unknown; an access far outside the mapped buffer points to a native MediaPipe problem or to file mapping from the APK, not to the Java layer. If it happens again, the run folder will contain `crashes-*.log` and `logcat-*.log` for the time of the run.
