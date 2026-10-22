@@ -1,19 +1,19 @@
-# Локальное окружение и сценарии на физическом устройстве
+# Local environment and physical-device scenarios
 
-`workspace/` содержит исходники проверенного окружения сборки, ADB-отладки и Intiface-стенда без Android Studio и эмулятора. Инструменты и отчёты хранятся вне Git.
+`workspace/` contains the sources of a tested environment for building, ADB debugging and the Intiface test bench, without Android Studio or an emulator. Tools and reports are kept outside Git.
 
-Окружение использует структуру:
+The environment uses this layout:
 
 ```text
 PoseGuardDev/
   env.sh
   bin/pg
   tools/
-  .tools/          # устанавливаемые инструменты, не входят в Git
-  artifacts/      # локальные результаты, не входят в Git
-  poseGuard/      # этот репозиторий
+  .tools/          # installed tools, not in Git
+  artifacts/      # local results, not in Git
+  poseGuard/      # this repository
 ```
 
-Чтобы восстановить такую структуру, разместите этот checkout в папке `poseGuard` и скопируйте содержимое `dev/workspace/` в родительскую папку. В уже настроенной рабочей папке это сделано.
+To recreate this layout, place this checkout in a folder named `poseGuard` and copy the contents of `dev/workspace/` into its parent folder.
 
-Подробности установки, отладки и команды приведены в [README окружения](workspace/README.md), сценарии и результаты — в [TESTING.md](workspace/TESTING.md). Логи и снимки из описания результатов остаются локальными артефактами и в репозиторий не входят.
+Setup, debugging and commands are described in the [environment README](workspace/README.md); device scenarios are in [TESTING.md](workspace/TESTING.md). Logs, screenshots and reports go to `artifacts/` and are not part of the repository.
