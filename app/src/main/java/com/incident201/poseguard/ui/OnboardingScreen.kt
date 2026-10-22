@@ -273,7 +273,7 @@ private fun ImageTipsOnboardingPage(
 }
 
 @Composable
-private fun OnboardingImageCard(
+internal fun OnboardingImageCard(
     imageRes: Int,
     showResultIcons: Boolean,
     compact: Boolean,

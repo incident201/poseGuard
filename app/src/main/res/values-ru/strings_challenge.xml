@@ -144,8 +144,6 @@
     <string name="challenge_penalty_interval_value">интервал %1$d с</string>
     <string name="guide_skip">Пропустить</string>
     <string name="challenge_intro_help">Как работают задания</string>
-    <string name="challenge_intro_author">Автор</string>
-    <string name="challenge_intro_executor">Исполнитель</string>
     <string name="challenge_intro_to_hub">К заданиям</string>
     <string name="challenge_intro_open">Открыть</string>
     <string name="challenge_intro_title_1">Игра на двоих</string>
@@ -166,5 +164,4 @@
     <string name="challenge_intro_tip_5a">Отправьте отчёт автору одной кнопкой. Открыть его может только автор.</string>
     <string name="challenge_intro_tip_5b">В отчёте итог, хронология нарушений и повтор движений.</string>
     <string name="challenge_intro_tip_5c">PoseGuard пересчитывает отчёт и показывает, подтверждён ли результат.</string>
-    <string name="challenge_intro_file_only">только файлом</string>
 </resources>

@@ -8,30 +8,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Assessment
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.Flag
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.MoreTime
-import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Textsms
-import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Vibration
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,12 +26,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.incident201.poseguard.R
 import com.incident201.poseguard.challenge.TRACE_LANDMARK_INDICES
 import com.incident201.poseguard.tracker.Point3D
@@ -70,6 +46,8 @@ internal fun ChallengeIntro(
     onDone: (ChallengePage) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // The first pages show photos, as in the app's own onboarding; the last one plays a replay.
+    val images = listOf(R.drawable.challenge_slide_1, R.drawable.challenge_slide_2, R.drawable.challenge_slide_3, R.drawable.challenge_slide_4)
     val pages = listOf<Pair<Int, List<Int>>>(
         R.string.challenge_intro_title_1 to listOf(R.string.challenge_intro_tip_1a, R.string.challenge_intro_tip_1b),
         R.string.challenge_intro_title_2 to listOf(R.string.challenge_intro_tip_2a, R.string.challenge_intro_tip_2b),
@@ -95,22 +73,24 @@ internal fun ChallengeIntro(
     ) { index, compact ->
         val (title, tips) = pages[index]
         Column(Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(if (compact) 22.dp else 28.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                when (index) {
-                    0 -> ExchangeIllustration(language)
-                    1 -> RulesIllustration(language)
-                    2 -> TransportIllustration(language)
-                    3 -> SessionIllustration(language)
-                    else -> ReportIllustration(language)
-                }
+            val image = images.getOrNull(index)
+            if (image != null) {
+                OnboardingImageCard(
+                    imageRes = image,
+                    showResultIcons = false,
+                    compact = compact,
+                    modifier = Modifier.fillMaxWidth().weight(1f)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clip(RoundedCornerShape(if (compact) 22.dp else 28.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) { ReportIllustration(language) }
             }
             Spacer(Modifier.height(if (compact) 10.dp else 14.dp))
             OnboardingTipsList(language, tips, compact, Modifier.fillMaxWidth(), titleId = title)
@@ -118,154 +98,10 @@ internal fun ChallengeIntro(
     }
 }
 
-// Illustrations: drawn from the app's own icons and stick figure, so they follow the theme and
-// show the real controls rather than decoration.
+// The replay illustration: drawn from the app's own stick figure, so it follows the theme.
 
 private val FigureBlue = Color(0xFF6FE3FF)
 private val FigureRed = Color(0xFFFF6E6E)
-
-@Composable
-private fun Caption(text: String) {
-    Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp, textAlign = TextAlign.Center)
-}
-
-@Composable
-private fun Phone(content: @Composable BoxScope.() -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(width = 112.dp, height = 200.dp)
-            .border(3.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
-            .padding(10.dp),
-        contentAlignment = Alignment.Center,
-        content = content
-    )
-}
-
-@Composable
-private fun ExchangeIllustration(language: AppLanguage) {
-    val primary = MaterialTheme.colorScheme.primary
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Phone { Icon(Icons.Filled.EditNote, null, tint = primary, modifier = Modifier.size(56.dp)) }
-            Spacer(Modifier.height(6.dp))
-            Caption(localizedString(language, R.string.challenge_intro_author))
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = primary, modifier = Modifier.size(34.dp))
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = primary, modifier = Modifier.size(34.dp))
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(34.dp))
-                Icon(Icons.Filled.Assessment, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(34.dp))
-            }
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Phone { StickFigure(StandingPose, FigureBlue, Modifier.fillMaxSize()) }
-            Spacer(Modifier.height(6.dp))
-            Caption(localizedString(language, R.string.challenge_intro_executor))
-        }
-    }
-}
-
-@Composable
-private fun RulesIllustration(language: AppLanguage) {
-    @Composable
-    fun Rule(icon: ImageVector, label: Int, hidden: Boolean = false, hideable: Boolean = false) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
-            Spacer(Modifier.width(12.dp))
-            Text(localizedString(language, label), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 17.sp, modifier = Modifier.weight(1f))
-            if (hideable) {
-                if (hidden) {
-                    Text("??:??", color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
-                    Spacer(Modifier.width(6.dp))
-                }
-                Icon(
-                    if (hidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                    null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-    }
-    Column(Modifier.widthIn(max = 360.dp)) {
-        Rule(Icons.Filled.Timer, R.string.challenge_group_duration, hidden = true, hideable = true)
-        Rule(Icons.Filled.Warning, R.string.challenge_group_errors)
-        Rule(Icons.Filled.MoreTime, R.string.challenge_group_penalties, hideable = true)
-        Rule(Icons.Filled.Tune, R.string.challenge_group_sensitivity)
-        Rule(Icons.Filled.Face, R.string.challenge_group_face)
-        Rule(Icons.AutoMirrored.Filled.VolumeUp, R.string.challenge_group_sounds)
-        Rule(Icons.Filled.Vibration, R.string.challenge_group_intiface)
-    }
-}
-
-@Composable
-private fun TransportIllustration(language: AppLanguage) {
-    @Composable
-    fun Way(icon: ImageVector, label: Int, sample: String?, modifier: Modifier) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
-            Box(
-                Modifier
-                    .size(88.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center
-            ) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(50.dp)) }
-            Spacer(Modifier.height(8.dp))
-            Text(localizedString(language, label), color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-            if (sample != null) {
-                Text(sample, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-            }
-        }
-    }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth()) {
-            Way(Icons.AutoMirrored.Filled.InsertDriveFile, R.string.challenge_add_file, ".pgtask", Modifier.weight(1f))
-            Way(Icons.Filled.Textsms, R.string.challenge_add_code, "PGT2:…", Modifier.weight(1f))
-            Way(Icons.Filled.QrCode, R.string.challenge_add_qr, null, Modifier.weight(1f))
-        }
-        Spacer(Modifier.height(32.dp))
-        // Embedded audio: file only.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.AudioFile, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
-            Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(localizedString(language, R.string.challenge_intro_file_only), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
-        }
-    }
-}
-
-@Composable
-private fun SessionIllustration(language: AppLanguage) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        StickFigure(StandingPose, FigureBlue, Modifier.size(width = 200.dp, height = 240.dp))
-        Spacer(Modifier.height(8.dp))
-        Text("??:??:??", color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(16.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // The session's stop button, as on the main screen.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.error)
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Icon(Icons.Filled.Stop, null, tint = MaterialTheme.colorScheme.onError, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(localizedString(language, R.string.stop), color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.width(8.dp))
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(26.dp))
-            Spacer(Modifier.width(8.dp))
-            Icon(Icons.Filled.Flag, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(34.dp))
-            Icon(Icons.Filled.Assessment, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(34.dp))
-        }
-    }
-}
 
 /** A looping replay: the figure drifts twice, turns red, and the timeline marks both moments. */
 @Composable

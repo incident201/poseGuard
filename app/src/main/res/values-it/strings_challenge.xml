@@ -144,8 +144,6 @@
     <string name="challenge_penalty_interval_value">intervallo %1$d s</string>
     <string name="guide_skip">Salta</string>
     <string name="challenge_intro_help">Come funzionano le sfide</string>
-    <string name="challenge_intro_author">Autore</string>
-    <string name="challenge_intro_executor">Esecutore</string>
     <string name="challenge_intro_to_hub">Alle sfide</string>
     <string name="challenge_intro_open">Apri</string>
     <string name="challenge_intro_title_1">Un gioco per due</string>
@@ -166,5 +164,4 @@
     <string name="challenge_intro_tip_5a">Invia il resoconto all’autore con un pulsante. Solo l’autore può aprirlo.</string>
     <string name="challenge_intro_tip_5b">Contiene l’esito, la cronologia delle violazioni e un replay dei movimenti.</string>
     <string name="challenge_intro_tip_5c">PoseGuard ricalcola il resoconto e mostra se l’esito è confermato.</string>
-    <string name="challenge_intro_file_only">solo come file</string>
 </resources>

@@ -144,8 +144,6 @@
     <string name="challenge_penalty_interval_value">intervalo %1$d s</string>
     <string name="guide_skip">Omitir</string>
     <string name="challenge_intro_help">Cómo funcionan los retos</string>
-    <string name="challenge_intro_author">Autor</string>
-    <string name="challenge_intro_executor">Ejecutor</string>
     <string name="challenge_intro_to_hub">A los retos</string>
     <string name="challenge_intro_open">Abrir</string>
     <string name="challenge_intro_title_1">Un juego para dos</string>
@@ -166,5 +164,4 @@
     <string name="challenge_intro_tip_5a">Envía el informe al autor con un botón. Solo el autor puede abrirlo.</string>
     <string name="challenge_intro_tip_5b">Incluye el resultado, la cronología de infracciones y una repetición de los movimientos.</string>
     <string name="challenge_intro_tip_5c">PoseGuard recalcula el informe y muestra si el resultado está confirmado.</string>
-    <string name="challenge_intro_file_only">solo como archivo</string>
 </resources>
