@@ -36,7 +36,9 @@ class ByteSink(initialCapacity: Int = 256) {
     fun toByteArray(): ByteArray = out.toByteArray()
 }
 
-class ByteSource(private val data: ByteArray, private var position: Int = 0, private val end: Int = data.size) {
+class ByteSource(private val data: ByteArray, position: Int = 0, private val end: Int = data.size) {
+    var position: Int = position
+        private set
     val remaining: Int get() = end - position
     val hasMore: Boolean get() = position < end
 

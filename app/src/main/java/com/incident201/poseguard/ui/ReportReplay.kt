@@ -40,22 +40,25 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.incident201.poseguard.challenge.TRACE_LANDMARK_INDICES
-import com.incident201.poseguard.challenge.TraceFrame
+import com.incident201.poseguard.challenge.TraceIndex
 import com.incident201.poseguard.challenge.TracePose
 import com.incident201.poseguard.challenge.TraceViolationEvent
 import com.incident201.poseguard.tracker.Point3D
 import com.incident201.poseguard.util.formatDurationHmsFromMillis
 
-/** Decoded trace prepared for drawing: one landmark list per frame and the session time axis. */
+/** Trace prepared for drawing: the session time axis, with each frame's pose decoded when shown. */
 internal class ReplayData(
     val startMs: Long,
     val endMs: Long,
-    val timestamps: LongArray,
-    val poses: List<List<Point3D>?>,
+    private val index: TraceIndex,
     val reference: List<Point3D>,
     val aspect: Float
 ) {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
+    private val timestamps: LongArray get() = index.evaluatedAtMs
+
+    /** Landmarks of frame [frameIndex], or null when the tracker received no pose. */
+    fun poseAt(frameIndex: Int): List<Point3D>? = index.pose(frameIndex)?.toPoseLandmarks()?.allLandmarks
 
     /** Index of the last frame at or before [timeMs]. */
     fun frameAt(timeMs: Long): Int {
@@ -71,19 +74,18 @@ internal class ReplayData(
 
     companion object {
         fun from(
-            frames: List<TraceFrame>,
+            index: TraceIndex,
             reference: TracePose,
             clockStartedAtMs: Long,
             endedAtMs: Long,
             imageWidth: Int,
             imageHeight: Int
         ): ReplayData {
-            val end = maxOf(endedAtMs, frames.lastOrNull()?.evaluatedAtMs ?: clockStartedAtMs)
+            val end = maxOf(endedAtMs, index.evaluatedAtMs.lastOrNull() ?: clockStartedAtMs)
             return ReplayData(
                 startMs = clockStartedAtMs,
                 endMs = end,
-                timestamps = LongArray(frames.size) { frames[it].evaluatedAtMs },
-                poses = frames.map { frame -> frame.pose?.toPoseLandmarks()?.allLandmarks },
+                index = index,
                 reference = reference.toPoseLandmarks().allLandmarks,
                 aspect = if (imageWidth > 0 && imageHeight > 0) imageWidth.toFloat() / imageHeight else 9f / 16f
             )
@@ -116,7 +118,7 @@ internal fun ReportReplayPlayer(
     }
 
     val frameIndex = data.frameAt(data.startMs + positionMs.toLong())
-    val landmarks = if (frameIndex >= 0) data.poses[frameIndex] else data.reference
+    val landmarks = remember(data, frameIndex) { if (frameIndex >= 0) data.poseAt(frameIndex) else data.reference }
     val activeEvent = events.lastOrNull { it.atMs - data.startMs in 0..positionMs.toLong() && positionMs - (it.atMs - data.startMs) < 1_500L }
 
     Column(modifier) {

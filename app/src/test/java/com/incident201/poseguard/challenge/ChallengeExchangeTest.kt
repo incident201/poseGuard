@@ -157,6 +157,8 @@ class ChallengeExchangeTest {
 
         assertEquals(true, (author.import(reportFile) as ImportResult.ReportImported).alreadyKnown)
         assertEquals(1, author.incomingReports().size)
+        assertEquals("Anna", author.incomingReport(incoming.report.reportId)?.report?.executorName)
+        assertNull(author.incomingReport(Blob(ByteArray(ChallengeSpec.ID_SIZE))))
     }
 
     @Test fun reportsOfSeveralExecutorsAreKeptApart() {

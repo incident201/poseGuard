@@ -39,6 +39,9 @@ class SessionTrace(
     val imageHeight: Int = 0
 ) {
     fun frames(): List<TraceFrame> = TraceFrameReader.decode(frameData, referenceTimestampMs, reference)
+
+    /** Random access for the replay without decoding every pose up front. */
+    fun index(): TraceIndex = TraceIndex.build(frameData, referenceTimestampMs, reference)
 }
 
 data class ChallengeReport(

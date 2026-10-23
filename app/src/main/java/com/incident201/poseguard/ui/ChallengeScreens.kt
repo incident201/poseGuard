@@ -1363,12 +1363,12 @@ private fun ReportScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = viewModel.challengeRepository
-    val incoming = rememberLoaded(reportId) { repository.incomingReports().firstOrNull { it.report.reportId == reportId } }
+    val incoming = rememberLoaded(reportId) { repository.incomingReport(reportId) }
     val replay = rememberLoaded(incoming) {
         val trace = incoming?.report?.trace ?: return@rememberLoaded null
         runCatching {
             ReplayData.from(
-                frames = trace.frames(),
+                index = trace.index(),
                 reference = trace.reference,
                 clockStartedAtMs = trace.clockStartedAtMs,
                 endedAtMs = incoming.report.endedAtMonoMs,

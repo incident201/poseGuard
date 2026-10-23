@@ -15,8 +15,14 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 
 /** QR codes carry the same `PGT2:` text code as chats, so scanning and pasting share one path. */
 object QrCodes {
-    /** Text code length a phone camera still reads reliably at error correction level L. */
-    const val MAX_TEXT_LENGTH = 2_000
+    /**
+     * Longest text code shown as a QR code (QR version 29 at level L). Longer tasks are
+     * shared as a file or a text code, which have no such limit.
+     */
+    const val MAX_TEXT_LENGTH = 1_500
+
+    /** Up to this length the code also fits level M, which tolerates more glare and blur. */
+    private const val MEDIUM_CORRECTION_MAX_LENGTH = 1_100
 
     fun canEncode(text: String): Boolean = text.length <= MAX_TEXT_LENGTH
 
@@ -28,7 +34,12 @@ object QrCodes {
                 BarcodeFormat.QR_CODE,
                 sizePx,
                 sizePx,
-                mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.MARGIN to 2)
+                mapOf(
+                    EncodeHintType.ERROR_CORRECTION to
+                        if (text.length <= MEDIUM_CORRECTION_MAX_LENGTH) ErrorCorrectionLevel.M else ErrorCorrectionLevel.L,
+                    // The quiet zone the QR standard asks for.
+                    EncodeHintType.MARGIN to 4
+                )
             )
         }.getOrNull() ?: return null
         val pixels = IntArray(matrix.width * matrix.height) { i ->
