@@ -179,6 +179,26 @@ class ChallengeFormatTest {
         }
     }
 
+    @Test fun traceIndexGivesEveryFrameWithoutDecodingAllPoses() {
+        val reference = TracePose.from(pose(0).quantizedForTrace())!!
+        val writer = TraceFrameWriter(1_000L, reference, maxBytes = 1 shl 20)
+        // Crosses several checkpoints, with dropouts on and right after them.
+        val expected = (1..300).map { i ->
+            TraceFrame(
+                timestampMs = 1_000L + i * 33L,
+                evaluatedAtMs = 1_000L + i * 33L + (i % 5),
+                faceStatus = FaceDetectionStatus.FaceVisible,
+                pose = if (i % TraceIndex.STRIDE in 0..1 || i % 17 == 0) null else TracePose.from(pose(i).quantizedForTrace())
+            )
+        }
+        expected.forEach(writer::append)
+        val index = TraceIndex.build(writer.toByteArray(), 1_000L, reference)
+        assertEquals(expected.size, index.size)
+        assertArrayEquals(expected.map { it.evaluatedAtMs }.toLongArray(), index.evaluatedAtMs)
+        expected.indices.reversed().forEach { i -> assertEquals("frame $i", expected[i].pose, index.pose(i)) }
+        assertEquals(0, TraceIndex.build(ByteArray(0), 1_000L, reference).size)
+    }
+
     @Test fun traceStopsAtItsSizeLimit() {
         val reference = TracePose.from(pose(0).quantizedForTrace())!!
         val writer = TraceFrameWriter(0L, reference, maxBytes = 256)

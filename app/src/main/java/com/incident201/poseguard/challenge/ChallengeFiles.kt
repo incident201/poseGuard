@@ -159,6 +159,7 @@ class ChallengeFiles(
         const val REPORT_EXTENSION = "pgreport"
         /** Upper bound for an inflated payload; a 30 minute trace is a few megabytes. */
         const val MAX_INFLATED_BYTES = 64 * 1024 * 1024
+        private const val INFLATE_INITIAL_CAPACITY = 1024 * 1024
         private val TASK_MAGIC = byteArrayOf('P'.code.toByte(), 'G'.code.toByte(), 'T'.code.toByte())
         private val REPORT_MAGIC = byteArrayOf('P'.code.toByte(), 'G'.code.toByte(), 'R'.code.toByte())
 
@@ -209,7 +210,8 @@ class ChallengeFiles(
             val inflater = Inflater()
             try {
                 inflater.setInput(data)
-                val out = ByteArrayOutputStream(data.size * 3 + 64)
+                // The size check below runs per chunk; do not reserve the bound up front.
+                val out = ByteArrayOutputStream(minOf(data.size.toLong() * 3 + 64, INFLATE_INITIAL_CAPACITY.toLong()).toInt())
                 val buffer = ByteArray(64 * 1024)
                 while (!inflater.finished()) {
                     val n = inflater.inflate(buffer)

@@ -135,7 +135,7 @@ class TraceFrameWriter(private val referenceTimestampMs: Long, reference: TraceP
 }
 
 object TraceFrameReader {
-    fun decode(data: ByteArray, referenceTimestampMs: Long, reference: TracePose, maxFrames: Int = 2_000_000): List<TraceFrame> {
+    fun decode(data: ByteArray, referenceTimestampMs: Long, reference: TracePose, maxFrames: Int = MAX_FRAMES): List<TraceFrame> {
         val frames = ArrayList<TraceFrame>()
         forEach(data, referenceTimestampMs, reference, maxFrames) { frames += it }
         return frames
@@ -143,39 +143,45 @@ object TraceFrameReader {
 
     /** Streaming replay avoids retaining millions of decoded poses just to check a report. */
     fun forEach(data: ByteArray, referenceTimestampMs: Long, reference: TracePose,
-                maxFrames: Int = 2_000_000, consume: (TraceFrame) -> Unit) {
+                maxFrames: Int = MAX_FRAMES, consume: (TraceFrame) -> Unit) {
         val source = ByteSource(data)
         var count = 0
         var previousTs = referenceTimestampMs
         var previousPose = reference
-        val n = TRACE_LANDMARK_INDICES.size
         while (source.hasMore) {
             if (count >= maxFrames) throw TlvFormatException("Too many frames")
-            val ts = checkedAdd(previousTs, source.zigzag())
-            val evaluatedAt = checkedAdd(ts, source.zigzag())
-            val flags = source.byte()
-            if (flags and 0xF8 != 0) throw TlvFormatException("Unknown frame flags")
-            val face = FACE_STATUS_CODES.getOrNull(flags and 0x3) ?: throw TlvFormatException("Bad face status")
-            val pose = if (flags and 0x4 != 0) {
-                val qx = IntArray(n)
-                val qy = IntArray(n)
-                val qp = IntArray(n)
-                for (i in 0 until n) {
-                    qx[i] = coordinate(previousPose.qx[i], source.zigzag(), 65535)
-                    qy[i] = coordinate(previousPose.qy[i], source.zigzag(), 65535)
-                    qp[i] = coordinate(previousPose.qPresence[i], source.zigzag(), 255)
-                    if (qx[i] !in 0..65535 || qy[i] !in 0..65535 || qp[i] !in 0..255) {
-                        throw TlvFormatException("Landmark out of range")
-                    }
-                }
-                TracePose(qx, qy, qp).also { previousPose = it }
-            } else {
-                null
-            }
-            consume(TraceFrame(ts, evaluatedAt, face, pose))
+            val frame = readFrame(source, previousTs, previousPose)
+            consume(frame)
             count++
-            previousTs = ts
+            previousTs = frame.timestampMs
+            frame.pose?.let { previousPose = it }
         }
+    }
+
+    internal const val MAX_FRAMES = 2_000_000
+
+    /** Reads the frame at [source]; the deltas are relative to [previousTs] and [previousPose]. */
+    internal fun readFrame(source: ByteSource, previousTs: Long, previousPose: TracePose): TraceFrame {
+        val n = TRACE_LANDMARK_INDICES.size
+        val ts = checkedAdd(previousTs, source.zigzag())
+        val evaluatedAt = checkedAdd(ts, source.zigzag())
+        val flags = source.byte()
+        if (flags and 0xF8 != 0) throw TlvFormatException("Unknown frame flags")
+        val face = FACE_STATUS_CODES.getOrNull(flags and 0x3) ?: throw TlvFormatException("Bad face status")
+        val pose = if (flags and 0x4 != 0) {
+            val qx = IntArray(n)
+            val qy = IntArray(n)
+            val qp = IntArray(n)
+            for (i in 0 until n) {
+                qx[i] = coordinate(previousPose.qx[i], source.zigzag(), 65535)
+                qy[i] = coordinate(previousPose.qy[i], source.zigzag(), 65535)
+                qp[i] = coordinate(previousPose.qPresence[i], source.zigzag(), 255)
+            }
+            TracePose(qx, qy, qp)
+        } else {
+            null
+        }
+        return TraceFrame(ts, evaluatedAt, face, pose)
     }
 
     private fun checkedAdd(a: Long, b: Long): Long = try { Math.addExact(a, b) }
@@ -185,5 +191,69 @@ object TraceFrameReader {
         val value = checkedAdd(previous.toLong(), delta)
         if (value !in 0L..max.toLong()) throw TlvFormatException("Landmark out of range")
         return value.toInt()
+    }
+}
+
+/**
+ * Random access to a trace for the replay. Keeps the evaluation time of every frame and a
+ * decoding checkpoint every [STRIDE] frames; a pose is decoded on request from the checkpoint
+ * before it. A long trace thus stays near its compact size instead of one object per landmark.
+ */
+class TraceIndex private constructor(
+    private val data: ByteArray,
+    /** Session clock of each frame, ascending as recorded. */
+    val evaluatedAtMs: LongArray,
+    private val checkpointOffsets: IntArray,
+    private val checkpointTimestamps: LongArray,
+    private val checkpointPoses: Array<TracePose>
+) {
+    val size: Int get() = evaluatedAtMs.size
+
+    /** The pose of frame [index], or null when the tracker received none. */
+    fun pose(index: Int): TracePose? {
+        require(index in 0 until size)
+        val checkpoint = index / STRIDE
+        val source = ByteSource(data, checkpointOffsets[checkpoint])
+        var previousTs = checkpointTimestamps[checkpoint]
+        var previousPose = checkpointPoses[checkpoint]
+        var current = checkpoint * STRIDE
+        while (true) {
+            val frame = TraceFrameReader.readFrame(source, previousTs, previousPose)
+            if (current == index) return frame.pose
+            previousTs = frame.timestampMs
+            frame.pose?.let { previousPose = it }
+            current++
+        }
+    }
+
+    companion object {
+        const val STRIDE = 64
+
+        /** Reads the whole stream once; throws [TlvFormatException] for a malformed one. */
+        fun build(data: ByteArray, referenceTimestampMs: Long, reference: TracePose,
+                  maxFrames: Int = TraceFrameReader.MAX_FRAMES): TraceIndex {
+            val source = ByteSource(data)
+            var times = LongArray(1024)
+            val offsets = ArrayList<Int>()
+            val timestamps = ArrayList<Long>()
+            val poses = ArrayList<TracePose>()
+            var count = 0
+            var previousTs = referenceTimestampMs
+            var previousPose = reference
+            while (source.hasMore) {
+                if (count >= maxFrames) throw TlvFormatException("Too many frames")
+                if (count % STRIDE == 0) {
+                    offsets += source.position
+                    timestamps += previousTs
+                    poses += previousPose
+                }
+                val frame = TraceFrameReader.readFrame(source, previousTs, previousPose)
+                if (count == times.size) times = times.copyOf(times.size * 2)
+                times[count++] = frame.evaluatedAtMs
+                previousTs = frame.timestampMs
+                frame.pose?.let { previousPose = it }
+            }
+            return TraceIndex(data, times.copyOf(count), offsets.toIntArray(), timestamps.toLongArray(), poses.toTypedArray())
+        }
     }
 }

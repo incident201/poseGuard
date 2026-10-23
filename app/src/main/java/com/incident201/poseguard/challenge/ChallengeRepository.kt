@@ -260,6 +260,16 @@ class ChallengeRepository(
         }.sortedByDescending { it.receivedAtMs }
     }
 
+    /** One received report; opens only its own file. */
+    fun incomingReport(reportId: Blob): IncomingReport? = synchronized(lock) {
+        val file = File(incomingDir, reportId.toHex() + ".pgreport")
+        if (!file.isFile) return@synchronized null
+        val result = files.decodeReport(file.readBytes(), ::authoredChallengeUnlocked)
+        (result as? ChallengeFileResult.Ok)?.value
+            ?.takeIf { (report, _) -> report.reportId == reportId }
+            ?.let { (report, authored) -> IncomingReport(report, authored, receivedAt(report.reportId)) }
+    }
+
     fun deleteIncoming(reportId: Blob) = synchronized(lock) {
         File(incomingDir, reportId.toHex() + ".pgreport").delete()
     }
