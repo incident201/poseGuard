@@ -164,4 +164,7 @@
     <string name="challenge_intro_tip_5a">Отправьте отчёт автору одной кнопкой. Открыть его может только автор.</string>
     <string name="challenge_intro_tip_5b">В отчёте итог, хронология нарушений и повтор движений.</string>
     <string name="challenge_intro_tip_5c">PoseGuard пересчитывает отчёт и показывает, подтверждён ли результат.</string>
+    <string name="challenge_intiface_unavailable">Обязательное устройство Intiface отключилось. Выполнение остановлено.</string>
+    <string name="report_cause_intiface_unavailable">Обязательное устройство Intiface отключилось</string>
+    <string name="report_reason_intiface">Сведения о подключении Intiface противоречат условиям или результату задания</string>
 </resources>

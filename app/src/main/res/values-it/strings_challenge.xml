@@ -164,4 +164,7 @@
     <string name="challenge_intro_tip_5a">Invia il resoconto all’autore con un pulsante. Solo l’autore può aprirlo.</string>
     <string name="challenge_intro_tip_5b">Contiene l’esito, la cronologia delle violazioni e un replay dei movimenti.</string>
     <string name="challenge_intro_tip_5c">PoseGuard ricalcola il resoconto e mostra se l’esito è confermato.</string>
+    <string name="challenge_intiface_unavailable">Il dispositivo Intiface richiesto si è disconnesso. La sessione è stata interrotta.</string>
+    <string name="report_cause_intiface_unavailable">Il dispositivo Intiface richiesto si è disconnesso</string>
+    <string name="report_reason_intiface">I dati della connessione Intiface contraddicono le condizioni o il risultato del compito</string>
 </resources>

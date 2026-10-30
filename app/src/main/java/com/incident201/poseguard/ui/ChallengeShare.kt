@@ -6,16 +6,22 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import java.io.File
+import java.util.UUID
 
 /** Hands challenge and report files to other apps through the challenge FileProvider. */
 internal object ChallengeShare {
     private const val SHARE_DIR = "challenge_share"
+    private const val RETENTION_MS = 7L * 24 * 60 * 60 * 1000
 
     /** Writes [bytes] to the share cache; call off the main thread. */
     fun stage(context: Context, bytes: ByteArray, fileName: String): File {
         val dir = File(context.cacheDir, SHARE_DIR).apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
-        return File(dir, fileName).apply { writeBytes(bytes) }
+        val cutoff = System.currentTimeMillis() - RETENTION_MS
+        dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.deleteRecursively() }
+        // Another app may open its URI much later. Keep each send, including equal
+        // display names, at its own path until the cache retention period expires.
+        val sendDir = File(dir, UUID.randomUUID().toString()).apply { mkdirs() }
+        return File(sendDir, fileName).apply { writeBytes(bytes) }
     }
 
     fun shareFile(context: Context, file: File, chooserTitle: String, text: String? = null) {

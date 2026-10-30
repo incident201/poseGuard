@@ -164,4 +164,7 @@
     <string name="challenge_intro_tip_5a">Envía el informe al autor con un botón. Solo el autor puede abrirlo.</string>
     <string name="challenge_intro_tip_5b">Incluye el resultado, la cronología de infracciones y una repetición de los movimientos.</string>
     <string name="challenge_intro_tip_5c">PoseGuard recalcula el informe y muestra si el resultado está confirmado.</string>
+    <string name="challenge_intiface_unavailable">El dispositivo Intiface requerido se ha desconectado. La sesión se ha detenido.</string>
+    <string name="report_cause_intiface_unavailable">El dispositivo Intiface requerido se ha desconectado</string>
+    <string name="report_reason_intiface">Los datos de conexión Intiface contradicen las condiciones o el resultado de la tarea</string>
 </resources>

@@ -20,7 +20,8 @@ class ReportVerifierTest {
 
     private fun report(spec: ChallengeSpec = spec(), duration: Long = 2000, static: Boolean = false,
                        face: FaceDetectionStatus = FaceDetectionStatus.FaceVisible,
-                       missing: Boolean = false, cause: SessionEndCause = SessionEndCause.Completed): ChallengeReport {
+                       missing: Boolean = false, cause: SessionEndCause = SessionEndCause.Completed,
+                       faceAt: ((Long) -> FaceDetectionStatus)? = null): ChallengeReport {
         val reference = pose()
         val recorder = ChallengeSessionRecorder(spec, 1, "test", 9000, 19000)
         recorder.startTrace(9900, reference, 10000, FaceDetectionStatus.FaceVisible)
@@ -53,10 +54,11 @@ class ReportVerifierTest {
         }
         for (step in 1..(duration / 50).toInt()) {
             end = 10000L + step * 50
+            val frameFace = faceAt?.invoke(end - 10000) ?: face
             val framePose = if(missing) PoseLandmarks() else pose(if(static) 0f else (step % 7) * 0.00005f)
-            recorder.frame(end - 10, end, face, framePose)
+            recorder.frame(end - 10, end, frameFace, framePose)
             tracker.trackFrame(framePose, end - 10).violation.toRuleViolationType()?.let { violation(it, end) }
-            if (!defeated && engine.onFaceStatus(config.faceCheckMode, face)) violation(RuleViolationType.FaceNotMatchingMode, end)
+            if (!defeated && engine.onFaceStatus(config.faceCheckMode, frameFace)) violation(RuleViolationType.FaceNotMatchingMode, end)
             if (defeated) break
         }
         return recorder.finish(if (defeated) SessionEndCause.TooManyViolations else cause,
@@ -120,6 +122,31 @@ class ReportVerifierTest {
         val later = r.copy(endedAtMonoMs = 15050, endedAtWallMs = 25050, actualTimerSeconds = 5)
         assertEquals(VerdictKind.Confirmed, ReplayReportVerifier.verify(later, s).kind)
         assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(later.copy(endCause = SessionEndCause.Completed), s).kind)
+    }
+
+    @Test fun faceRecoveryAfterDeadlineAllowsCompletionWithoutSuspiciousTiming() {
+        val s = spec(ChallengeRules(timer = TimerSpec(exactSeconds = 60), faceCheckMode = FaceCheckMode.FaceToCamera))
+        val r = report(s, duration = 63_250, faceAt = { elapsed ->
+            if (elapsed in 59_000 until 63_000) FaceDetectionStatus.Error else FaceDetectionStatus.FaceVisible
+        })
+        assertEquals(Verdict(VerdictKind.Confirmed), ReplayReportVerifier.verify(r, s))
+        val late = report(s, duration = 64_500, faceAt = { elapsed ->
+            if (elapsed in 59_000 until 63_000) FaceDetectionStatus.Error else FaceDetectionStatus.FaceVisible
+        })
+        assertTrue(ReplayReportVerifier.verify(late, s).reasons.contains("timing"))
+        assertTrue(ReplayReportVerifier.verify(report(duration = 3500), spec()).reasons.contains("timing"))
+    }
+
+    @Test fun requiredIntifaceCannotConfirmSuccessWithoutAConnection() {
+        val s = spec().copy(rules = spec().rules.copy(intifaceRequired = true))
+        val disconnected = report(s)
+        assertEquals(Verdict(VerdictKind.Mismatch, listOf("intiface")), ReplayReportVerifier.verify(disconnected, s))
+        assertEquals(Verdict(VerdictKind.Confirmed), ReplayReportVerifier.verify(disconnected.copy(intifaceConnected = true), s))
+        val interrupted = report(s, duration = 500, cause = SessionEndCause.IntifaceUnavailable)
+        assertEquals(Verdict(VerdictKind.Confirmed), ReplayReportVerifier.verify(interrupted, s))
+        assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(interrupted.copy(intifaceConnected = true), s).kind)
+        assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(interrupted, spec()).kind)
+        assertEquals(VerdictKind.Unverified, ReplayReportVerifier.verify(interrupted.copy(trace = null, actualTimerSeconds = 0), s).kind)
     }
     @Test fun backwardsFramesAndLongGapsCannotBeConfirmed() {
         val r = report(); val t = r.trace!!

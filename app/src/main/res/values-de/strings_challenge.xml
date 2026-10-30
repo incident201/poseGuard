@@ -164,4 +164,7 @@
     <string name="challenge_intro_tip_5a">Senden Sie den Bericht mit einer Schaltfläche an den Autor. Nur der Autor kann ihn öffnen.</string>
     <string name="challenge_intro_tip_5b">Er enthält das Ergebnis, den Verlauf der Verstöße und eine Wiedergabe der Bewegungen.</string>
     <string name="challenge_intro_tip_5c">PoseGuard berechnet den Bericht nach und zeigt, ob das Ergebnis bestätigt ist.</string>
+    <string name="challenge_intiface_unavailable">Das erforderliche Intiface-Gerät wurde getrennt. Die Sitzung wurde gestoppt.</string>
+    <string name="report_cause_intiface_unavailable">Erforderliches Intiface-Gerät getrennt</string>
+    <string name="report_reason_intiface">Die Intiface-Verbindungsdaten widersprechen den Aufgabenbedingungen oder dem Ergebnis</string>
 </resources>

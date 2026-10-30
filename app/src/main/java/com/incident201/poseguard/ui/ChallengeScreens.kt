@@ -495,6 +495,7 @@ internal fun endCauseLabel(cause: SessionEndCause): Int = when (cause) {
     SessionEndCause.CameraNoFrame -> R.string.report_cause_camera_no_frame
     SessionEndCause.CameraNoBody -> R.string.report_cause_camera_no_body
     SessionEndCause.FaceCheckUnavailable -> R.string.report_cause_face_unavailable
+    SessionEndCause.IntifaceUnavailable -> R.string.report_cause_intiface_unavailable
     SessionEndCause.Surrendered -> R.string.report_cause_surrendered
 }
 
@@ -1412,6 +1413,7 @@ private fun ReportScreen(
                     "trace" -> R.string.report_reason_trace
                     "static" -> R.string.report_reason_static
                     "events" -> R.string.report_reason_events
+                    "intiface" -> R.string.report_reason_intiface
                     "no_trace" -> R.string.report_reason_no_trace
                     else -> R.string.report_reason_result
                 })

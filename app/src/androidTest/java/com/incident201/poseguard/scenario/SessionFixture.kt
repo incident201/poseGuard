@@ -89,6 +89,7 @@ open class SessionFixture {
 
     /** Default timing removes the stabilization and countdown waits; tests of those phases override it. */
     internal open fun timing(): SessionTiming = SessionTiming(now::get, 0, 0)
+    internal open fun createModel(): GameViewModel = GameViewModel(app, timing())
 
     @Before fun createSessionFixture() {
         app = ApplicationProvider.getApplicationContext()
@@ -97,7 +98,7 @@ open class SessionFixture {
         check(prefs.edit().clear().commit())
         now.set(SystemClock.elapsedRealtime())
         onMain {
-            model = GameViewModel(app, timing())
+            model = createModel()
             store.put("scenario", model)
             model.updateTimelapseRecordingEnabled(false)
             model.updateMinimumPenaltyIntervalSeconds(0)

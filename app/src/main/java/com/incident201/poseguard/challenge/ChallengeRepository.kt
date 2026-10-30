@@ -9,6 +9,7 @@ import com.incident201.poseguard.challenge.codec.ChallengeCodec
 import com.incident201.poseguard.challenge.codec.ReportCodec
 import com.incident201.poseguard.challenge.codec.TlvReader
 import com.incident201.poseguard.challenge.codec.TlvWriter
+import java.io.DataInputStream
 import java.io.File
 import java.security.SecureRandom
 
@@ -47,6 +48,7 @@ class ChallengeRepository(
     private val receivedDir = File(root, "received")
     private val outgoingDir = File(root, "reports_out")
     private val incomingDir = File(root, "reports_in")
+    private val reportContextDir = File(root, "report_context")
     private val audioDir = File(root, "audio")
     private val prefs = context.getSharedPreferences(
         if (storageName == DEFAULT_STORAGE) "challenge_state" else "challenge_state_$storageName",
@@ -104,11 +106,18 @@ class ChallengeRepository(
     }
 
     fun deleteAuthored(id: Blob) = synchronized(lock) {
+        preserveOutgoingContext(id)
+        // Select by the container header, without needing the key we are deleting or
+        // inflating every recording in the inbox. This also removes old orphan files.
+        listFiles(incomingDir, ".pgreport").filter { file ->
+            runCatching {
+                val header = ByteArray(ChallengeFiles.REPORT_HEADER_SIZE)
+                DataInputStream(file.inputStream()).use { it.readFully(header) }
+                files.reportChallengeId(header) == id
+            }.getOrDefault(false)
+        }.forEach { it.delete() }
         File(authoredDir, id.toHex() + ".bin").delete()
         File(audioDir, id.toHex()).deleteRecursively()
-        incomingReports().filter { it.report.challengeId == id }.forEach {
-            File(incomingDir, it.report.reportId.toHex() + ".pgreport").delete()
-        }
     }
 
     fun taskFile(spec: ChallengeSpec): ByteArray = files.encodeTask(spec)
@@ -183,6 +192,7 @@ class ChallengeRepository(
     }
 
     fun deleteReceived(id: Blob) = synchronized(lock) {
+        preserveOutgoingContext(id)
         File(receivedDir, id.toHex() + ".pgtask").delete()
         File(audioDir, id.toHex()).deleteRecursively()
     }
@@ -226,29 +236,57 @@ class ChallengeRepository(
 
     // Reports
 
-    fun saveOutgoingReport(report: ChallengeReport) = synchronized(lock) {
+    fun saveOutgoingReport(report: ChallengeReport, spec: ChallengeSpec? = null) = synchronized(lock) {
+        (spec ?: runnableChallenge(report.challengeId))?.let {
+            require(it.id == report.challengeId)
+            saveReportContext(it)
+        }
         writeAtomically(File(outgoingDir, report.reportId.toHex() + ".report"), ReportCodec.encode(report))
     }
 
     fun outgoingReports(): List<OutgoingReport> = synchronized(lock) {
         listFiles(outgoingDir, ".report").mapNotNull { file ->
             val report = runCatching { ReportCodec.decode(file.readBytes()) }.getOrNull() ?: return@mapNotNull null
-            OutgoingReport(report, runnableChallenge(report.challengeId)?.title.orEmpty())
+            OutgoingReport(report, (readReportContext(report.challengeId) ?: runnableChallenge(report.challengeId))?.title.orEmpty())
         }.sortedByDescending { it.report.endedAtWallMs }
     }
 
     fun deleteOutgoing(reportId: Blob) = synchronized(lock) {
-        File(outgoingDir, reportId.toHex() + ".report").delete()
+        val file = File(outgoingDir, reportId.toHex() + ".report")
+        val id = runCatching { ReportCodec.decode(file.readBytes()).challengeId }.getOrNull()
+        if (file.delete() && id != null && !hasOutgoingReports(id)) {
+            File(reportContextDir, id.toHex() + ".bin").delete()
+        }
     }
 
     /** Sealed report file for the author, with the executor's name and comment. */
-    fun reportFile(report: ChallengeReport, executorName: String, comment: String): ByteArray? {
-        val spec = runnableChallenge(report.challengeId) ?: return null
+    fun reportFile(report: ChallengeReport, executorName: String, comment: String): ByteArray? = synchronized(lock) {
+        val spec = readReportContext(report.challengeId) ?: runnableChallenge(report.challengeId) ?: return@synchronized null
         val named = report.copy(
             executorName = executorName.trim().take(ReportCodec.MAX_TEXT_LENGTH),
             executorComment = comment.trim().take(ReportCodec.MAX_TEXT_LENGTH)
         )
-        return files.encodeReport(named, spec)
+        files.encodeReport(named, spec)
+    }
+
+    /** Only the export context is retained, never another copy of embedded audio. */
+    private fun saveReportContext(spec: ChallengeSpec) {
+        writeAtomically(File(reportContextDir, spec.id.toHex() + ".bin"),
+            ChallengeCodec.encode(spec.copy(rules = spec.rules.copy(audioClips = emptyMap()))))
+    }
+
+    private fun readReportContext(id: Blob): ChallengeSpec? = runCatching {
+        ChallengeCodec.decode(File(reportContextDir, id.toHex() + ".bin").readBytes()).takeIf { it.id == id }
+    }.getOrNull()
+
+    /** Reports saved by older versions have no export context yet. */
+    private fun preserveOutgoingContext(id: Blob) {
+        if (readReportContext(id) != null) return
+        if (hasOutgoingReports(id)) runnableChallenge(id)?.let(::saveReportContext)
+    }
+
+    private fun hasOutgoingReports(id: Blob): Boolean = listFiles(outgoingDir, ".report").any {
+        runCatching { ReportCodec.decode(it.readBytes()).challengeId == id }.getOrDefault(false)
     }
 
     fun incomingReports(): List<IncomingReport> = synchronized(lock) {

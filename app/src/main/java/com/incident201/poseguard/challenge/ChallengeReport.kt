@@ -10,7 +10,8 @@ enum class SessionEndCause {
     CameraNoFrame,
     CameraNoBody,
     FaceCheckUnavailable,
-    Surrendered
+    Surrendered,
+    IntifaceUnavailable
 }
 
 enum class TraceViolationType { Drift, Motion, PersonDisappeared, Face }

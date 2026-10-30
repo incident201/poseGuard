@@ -42,6 +42,9 @@ object ReplayReportVerifier : ReportVerifier {
         if (report.challengeId != spec.id) mismatch += "task"
         if (report.attempt < 1 || (spec.attemptsAllowed > 0 && report.attempt > spec.attemptsAllowed)) suspicious += "attempts"
         if (report.initialTimerSeconds !in spec.rules.timer.minSeconds..spec.rules.timer.maxSeconds) mismatch += "result"
+        if ((spec.rules.intifaceRequired && report.success && !report.intifaceConnected) ||
+            (report.endCause == SessionEndCause.IntifaceUnavailable &&
+                (!spec.rules.intifaceRequired || report.intifaceConnected))) mismatch += "intiface"
         val start = report.startedAtMonoMs
         val end = report.endedAtMonoMs
         if (start < 0 || end < start || end - start > MAX_SESSION_MS || report.startedAtWallMs < 0 ||
@@ -49,7 +52,8 @@ object ReplayReportVerifier : ReportVerifier {
         if (kotlin.math.abs((report.endedAtWallMs - report.startedAtWallMs) - (end - start)) > 5_000L) suspicious += "timing"
         val trace = report.trace
         if (trace == null) {
-            if (report.endCause !in setOf(SessionEndCause.Surrendered, SessionEndCause.CameraNoFrame, SessionEndCause.CameraNoBody) ||
+            if (report.endCause !in setOf(SessionEndCause.Surrendered, SessionEndCause.CameraNoFrame,
+                    SessionEndCause.CameraNoBody, SessionEndCause.IntifaceUnavailable) ||
                 report.actualTimerSeconds != 0 || report.counts != RuleViolationCounts() || report.events.isNotEmpty()) mismatch += "result"
             return when {
                 mismatch.isNotEmpty() -> Verdict(VerdictKind.Mismatch, mismatch.toList())
@@ -84,6 +88,7 @@ object ReplayReportVerifier : ReportVerifier {
         var staticSince = trace.referenceTimestampMs
         var previousPose: TracePose? = trace.reference
         var impossibleTiming = false
+        var completionBlockedUntilMs = trace.clockStartedAtMs
 
         fun register(type: RuleViolationType, at: Long) {
             if (defeatedAt != null || engine.isRateLimited(at, config)) return
@@ -122,13 +127,17 @@ object ReplayReportVerifier : ReportVerifier {
                 previousTs = frame.timestampMs
                 previousEvaluation = frame.evaluatedAtMs
                 if (defeatedAt != null) mismatch += "result"
+                // The live timer waits for face detection to recover. Give that
+                // recovery the same completion grace as an ordinary deadline.
+                if (outageSince != null) completionBlockedUntilMs = frame.evaluatedAtMs
+                if (outageSince == null && frame.evaluatedAtMs - completionBlockedUntilMs > 1_000 &&
+                    clock.snapshot(frame.evaluatedAtMs - 1_000).finished) suspicious += "timing"
                 if (settings.faceCheckMode != FaceCheckMode.Disabled) {
                     if (outageSince?.let { frame.evaluatedAtMs - it >= 5_000 } == true) mismatch += "result"
                     if (frame.faceStatus.unavailable()) {
                         if (outageSince == null) outageSince = frame.evaluatedAtMs
                     } else outageSince = null
                 }
-                if (outageSince == null && clock.snapshot(frame.evaluatedAtMs - 1_000).finished) suspicious += "timing"
                 val result = tracker.trackFrame(frame.pose?.toPoseLandmarks() ?: PoseLandmarks(), frame.timestampMs)
                 result.violation.toRuleViolationType()?.let { register(it, frame.evaluatedAtMs) }
                 if (defeatedAt == null && engine.onFaceStatus(config.faceCheckMode, frame.faceStatus)) {
@@ -150,7 +159,8 @@ object ReplayReportVerifier : ReportVerifier {
                 SessionEndCause.TooManyViolations -> if (defeatedAt == null || end - defeatedAt > 1_000) mismatch += "result"
                 SessionEndCause.FaceCheckUnavailable -> if (!faceTimedOut || defeatedAt != null) mismatch += "result"
                 SessionEndCause.CameraNoBody -> mismatch += "result" // Only before reference acquisition.
-                SessionEndCause.CameraNoFrame, SessionEndCause.Surrendered -> if (defeatedAt != null || faceTimedOut) mismatch += "result"
+                SessionEndCause.CameraNoFrame, SessionEndCause.Surrendered,
+                SessionEndCause.IntifaceUnavailable -> if (defeatedAt != null || faceTimedOut) mismatch += "result"
             }
         }
         return when {

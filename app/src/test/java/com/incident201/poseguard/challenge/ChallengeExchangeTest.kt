@@ -196,6 +196,65 @@ class ChallengeExchangeTest {
         assertEquals(ChallengeFileError.UnknownChallenge, failure(author.import(reportFile)))
     }
 
+    @Test fun deletingAReceivedTaskStillAllowsSendingItsReportsAfterRestart() {
+        val authored = author.create(attempts = 1)
+        val spec = executor.importTask(author.taskFile(authored.spec)).spec
+        executor.reportFor(spec)
+        val original = executor.outgoingReports().single().report
+        executor.deleteReceived(spec.id)
+        assertNull(executor.receivedChallenge(spec.id))
+
+        val restarted = participant("executor")
+        val outgoing = restarted.outgoingReports().single()
+        assertEquals(spec.title, outgoing.challengeTitle)
+        val exported = restarted.reportFile(outgoing.report, "Anna", "sent later")!!
+        val incoming = (author.import(exported) as ImportResult.ReportImported).report.report
+        assertEquals(original.reportId, incoming.reportId)
+        assertEquals("Anna", incoming.executorName)
+        assertEquals("sent later", incoming.executorComment)
+        assertEquals(0, restarted.importTask(author.taskFile(spec)).attemptsLeft)
+    }
+
+    @Test fun deletingATaskPreservesExportContextForReportsFromOlderVersions() {
+        val spec = executor.importTask(author.taskFile(author.create().spec)).spec
+        executor.reportFor(spec)
+        // Older releases stored only the raw .report file.
+        File(context.filesDir, "test_executor/report_context").deleteRecursively()
+        executor.deleteReceived(spec.id)
+        val outgoing = executor.outgoingReports().single()
+        assertEquals(spec.title, outgoing.challengeTitle)
+        assertTrue(author.import(executor.reportFile(outgoing.report, "", "")!!) is ImportResult.ReportImported)
+    }
+
+    @Test fun deletingAnOwnTestTaskAlsoKeepsItsOutgoingReportsSendable() {
+        val spec = author.create().spec
+        author.reportFor(spec)
+        author.deleteAuthored(spec.id)
+        val outgoing = author.outgoingReports().single()
+        assertEquals(spec.title, outgoing.challengeTitle)
+        assertNotNull(author.reportFile(outgoing.report, "", ""))
+    }
+
+    @Test fun deletingAnAuthoredTaskRemovesItsReportFilesAndKeepsOtherTasksReports() {
+        val first = author.create()
+        val second = author.create()
+        val firstFile = executor.reportFor(executor.importTask(author.taskFile(first.spec)).spec)
+        val secondFile = executor.reportFor(executor.importTask(author.taskFile(second.spec)).spec)
+        val firstReport = (author.import(firstFile) as ImportResult.ReportImported).report.report
+        val secondReport = (author.import(secondFile) as ImportResult.ReportImported).report.report
+        val inbox = File(context.filesDir, "test_author/reports_in")
+        assertEquals(2, inbox.listFiles()!!.size)
+        author.deleteAuthored(first.spec.id)
+        assertEquals(listOf(secondReport.reportId), author.incomingReports().map { it.report.reportId })
+        assertEquals(1, inbox.listFiles()!!.size)
+
+        // Also clean files orphaned by the old deletion order, when the key is gone.
+        val orphan = File(inbox, firstReport.reportId.toHex() + ".pgreport").apply { writeBytes(firstFile) }
+        author.deleteAuthored(first.spec.id)
+        assertTrue(!orphan.exists())
+        assertNotNull(author.incomingReport(secondReport.reportId))
+    }
+
     // Broken input
 
     @Test fun anythingThatIsNotAChallengeIsRejected() {

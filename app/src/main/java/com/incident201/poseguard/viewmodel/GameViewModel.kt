@@ -45,6 +45,7 @@ import com.incident201.poseguard.challenge.TraceViolationType
 import com.incident201.poseguard.challenge.applyTo
 import com.incident201.poseguard.challenge.quantizedForTrace
 import com.incident201.poseguard.intiface.IntifaceBackgroundMode
+import com.incident201.poseguard.intiface.IntifaceController
 import com.incident201.poseguard.intiface.IntifaceDeviceInfo
 import com.incident201.poseguard.intiface.IntifaceUiState
 import com.incident201.poseguard.intiface.IntifaceVibrationPattern
@@ -321,7 +322,8 @@ enum class ChallengeMessage { IntifaceRequired, NoAttemptsLeft, ReportSaveFailed
 
 class GameViewModel internal constructor(
     application: Application,
-    private val sessionTiming: SessionTiming
+    private val sessionTiming: SessionTiming,
+    private val intifaceController: IntifaceController = createIntifaceController(application.applicationContext)
 ) : AndroidViewModel(application), SensorEventListener {
     constructor(application: Application) : this(application, SessionTiming())
 
@@ -343,7 +345,6 @@ class GameViewModel internal constructor(
     private var stabilizationFallbackJob: Job? = null
 
     private val prefs: SharedPreferences = application.getSharedPreferences("game_settings", Context.MODE_PRIVATE)
-    private val intifaceController = createIntifaceController(application.applicationContext)
     val intifaceState: StateFlow<IntifaceUiState> = intifaceController.state
 
     private val _gameState = MutableStateFlow(GameState.Idle)
@@ -519,6 +520,11 @@ class GameViewModel internal constructor(
     init {
         applySettingsToEngines(_gameSettings.value)
         _statusMessage.value = tr(R.string.status_initial)
+        viewModelScope.launch {
+            intifaceState.collect { state ->
+                synchronized(processingLock) { stopIfRequiredIntifaceUnavailable(state) }
+            }
+        }
     }
 
     private fun loadSettings(): GameSettings {
@@ -1212,14 +1218,35 @@ class GameViewModel internal constructor(
         intifaceController.disconnect()
     }
 
-    private fun isIntifaceRuntimeReady(settings: GameSettings = _gameSettings.value): Boolean {
+    private fun isIntifaceRuntimeReady(
+        settings: GameSettings = _gameSettings.value,
+        state: IntifaceUiState = intifaceController.state.value
+    ): Boolean {
         if (!hasIntifaceLocalNetworkPermission()) {
-            handleMissingIntifaceLocalNetworkPermission()
+            runOnMain { handleMissingIntifaceLocalNetworkPermission() }
             return false
         }
-        val state = intifaceController.state.value
         return state.isSupported && settings.intifaceConnectionEnabled &&
             state.isConnected && state.selectedDevice != null
+    }
+
+    /** Called under processingLock, including before either session phase or success. */
+    private fun stopIfRequiredIntifaceUnavailable(state: IntifaceUiState = intifaceController.state.value): Boolean {
+        if (_gameState.value !in setOf(GameState.WaitingForStabilization, GameState.StartingDelay, GameState.HoldingPose) ||
+            _activeChallenge.value?.spec?.rules?.intifaceRequired != true || isIntifaceRuntimeReady(sessionRules, state)
+        ) return false
+        val reserved = synchronized(sessionTargetLock) {
+            // A disconnect observed while completing success takes precedence.
+            if (pendingTerminalResult == PendingTerminalResult.Success) pendingTerminalResult = null
+            tryReserveSessionDefeat(includeStabilization = true)
+        }
+        if (!reserved) return false
+        completeDefeatAfterReservation(
+            reason = tr(R.string.challenge_intiface_unavailable),
+            stoppedByTechnicalError = true,
+            cause = SessionEndCause.IntifaceUnavailable
+        )
+        return true
     }
 
     private fun startIntifaceSessionSignals() {
@@ -1709,6 +1736,7 @@ class GameViewModel internal constructor(
             }
             // One clock reading per frame keeps penalty and outage decisions reproducible.
             val now = sessionTiming.nowMs()
+            if (stopIfRequiredIntifaceUnavailable()) return
             if (updateFaceCheckAvailability(nextOverlayState.face.status, now)) return
             val isHoldingPose = _gameState.value == GameState.HoldingPose
             if (!isHoldingPose) {
@@ -2128,6 +2156,8 @@ class GameViewModel internal constructor(
         if (!canComplete) {
             return@synchronized
         }
+        val intifaceSnapshot = intifaceController.state.value
+        if (stopIfRequiredIntifaceUnavailable(intifaceSnapshot)) return@synchronized
 
         _sessionSummary.value = SessionSummary(
             result = GameState.Success,
@@ -2136,7 +2166,7 @@ class GameViewModel internal constructor(
             violationCounts = _ruleViolationCounts.value,
             settings = sessionSettingsSnapshot
         )
-        finishChallengeSession(SessionEndCause.Completed)
+        finishChallengeSession(SessionEndCause.Completed, intifaceSnapshot)
         _gameState.value = GameState.Success
         faceCheckUnavailableSinceMs = null
         stopIntifaceSessionSignals()
@@ -2167,6 +2197,7 @@ class GameViewModel internal constructor(
 
     private fun checkSessionProgress() = synchronized(processingLock) {
         if (_gameState.value != GameState.HoldingPose) return@synchronized
+        if (stopIfRequiredIntifaceUnavailable()) return@synchronized
         if (stopIfFaceCheckTimedOut()) return@synchronized
         // A stalled camera/delegate must not award success without pose validation.
         val lastFrame = synchronized(frameLock) { latestAnalyzedFrame }
@@ -2288,6 +2319,9 @@ class GameViewModel internal constructor(
             }
             _startDelayRemainingSeconds.value = 0
             val analyzedFrame = getFreshAnalyzedFrame(1200)
+            synchronized(processingLock) {
+                if (_gameState.value != GameState.StartingDelay || stopIfRequiredIntifaceUnavailable()) return@launch
+            }
             val initialPose = analyzedFrame?.pose
             if (analyzedFrame == null) { triggerDefeat(tr(R.string.camera_no_frame)); return@launch }
             if (initialPose == null || !initialPose.hasEnoughKeypoints()) {
@@ -2295,11 +2329,12 @@ class GameViewModel internal constructor(
                 return@launch
             }
             _timerSeconds.value = if (sessionShowsElapsed) 0 else sessionInitialTimerSeconds
-            val clockStartedAtMs = sessionTiming.nowMs()
-            synchronized(sessionTargetLock) {
-                sessionClock.start(clockStartedAtMs)
-            }
             synchronized(processingLock) {
+                if (_gameState.value != GameState.StartingDelay || stopIfRequiredIntifaceUnavailable()) return@launch
+                val clockStartedAtMs = sessionTiming.nowMs()
+                synchronized(sessionTargetLock) {
+                    sessionClock.start(clockStartedAtMs)
+                }
                 processingGeneration += 1
                 movementTracker.reset()
                 resetRuleCounters()
@@ -2321,19 +2356,20 @@ class GameViewModel internal constructor(
                 )
                 _gameState.value = GameState.HoldingPose
                 updateFaceCheckAvailability(analyzedFrame.face.status, clockStartedAtMs)
+                _statusMessage.value = tr(R.string.time_started_hold_position)
+                startTimerLoop()
+                startIntifaceSessionSignals()
+                playAudioCue(
+                    AudioCue.TimeStartedHoldPosition,
+                    ttsText(TtsPhraseTemplate.TimeStartedHoldPosition)
+                )
             }
-            _statusMessage.value = tr(R.string.time_started_hold_position)
-            startTimerLoop()
-            startIntifaceSessionSignals()
-            playAudioCue(
-                AudioCue.TimeStartedHoldPosition,
-                ttsText(TtsPhraseTemplate.TimeStartedHoldPosition)
-            )
         }
     }
 
-    private fun completeDeviceStabilization() {
-        if (_gameState.value != GameState.WaitingForStabilization || stabilizationCompleted) return
+    private fun completeDeviceStabilization() = synchronized(processingLock) {
+        if (stopIfRequiredIntifaceUnavailable()) return@synchronized
+        if (_gameState.value != GameState.WaitingForStabilization || stabilizationCompleted) return@synchronized
         stabilizationCompleted = true
         stabilizationFallbackJob?.cancel()
         stabilizationFallbackJob = null
@@ -2463,10 +2499,12 @@ class GameViewModel internal constructor(
     }
 
     /** Builds the challenge report once a challenge session has a result, and keeps it on disk. */
-    private fun finishChallengeSession(cause: SessionEndCause) = synchronized(processingLock) {
+    private fun finishChallengeSession(
+        cause: SessionEndCause,
+        intifaceSnapshot: IntifaceUiState = intifaceController.state.value
+    ) = synchronized(processingLock) {
         val recorder = challengeRecorder ?: return@synchronized
         challengeRecorder = null
-        val intifaceState = intifaceController.state.value
         val endedAtMs = sessionTiming.nowMs()
         val report = recorder.finish(
             endCause = cause,
@@ -2475,11 +2513,13 @@ class GameViewModel internal constructor(
             initialTimerSeconds = sessionInitialTimerSeconds,
             actualTimerSeconds = synchronized(sessionTargetLock) { sessionClock.snapshot(endedAtMs).elapsedSeconds },
             counts = _ruleViolationCounts.value,
-            intifaceConnected = intifaceState.isConnected && intifaceState.selectedDevice != null
+            intifaceConnected = cause != SessionEndCause.IntifaceUnavailable &&
+                intifaceSnapshot.isConnected && intifaceSnapshot.selectedDevice != null
         )
         _challengeReport.value = report
+        val spec = _activeChallenge.value?.spec
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { challengeRepository.saveOutgoingReport(report) }.onFailure {
+            runCatching { challengeRepository.saveOutgoingReport(report, spec) }.onFailure {
                 Log.e(tag, "Unable to store challenge report", it)
                 _challengeMessage.value = ChallengeMessage.ReportSaveFailed
             }

@@ -111,6 +111,9 @@ class ChallengeFiles(
         else -> null
     }
 
+    /** For deleting local inbox files only; this header does not authenticate a report. */
+    internal fun reportChallengeId(header: ByteArray): Blob? = parseHeader(header, REPORT_MAGIC)?.challengeId
+
     private fun taskContext(header: ByteArray, id: Blob) = SealContext(
         kind = ChallengeFileKind.Task,
         header = header,
@@ -162,6 +165,7 @@ class ChallengeFiles(
         private const val INFLATE_INITIAL_CAPACITY = 1024 * 1024
         private val TASK_MAGIC = byteArrayOf('P'.code.toByte(), 'G'.code.toByte(), 'T'.code.toByte())
         private val REPORT_MAGIC = byteArrayOf('P'.code.toByte(), 'G'.code.toByte(), 'R'.code.toByte())
+        internal val REPORT_HEADER_SIZE = REPORT_MAGIC.size + 2 + ChallengeSpec.ID_SIZE * 2
 
         fun toTextCode(taskFile: ByteArray): String =
             TEXT_CODE_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(taskFile)
