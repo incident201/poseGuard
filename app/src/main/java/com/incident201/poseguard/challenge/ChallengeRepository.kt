@@ -21,6 +21,23 @@ data class ReceivedChallenge(val spec: ChallengeSpec, val attemptsUsed: Int, val
 /** A report this device produced and may still send. */
 data class OutgoingReport(val report: ChallengeReport, val challengeTitle: String)
 
+/** List data deliberately cannot retain a pose trace, events, audio or author keys. */
+data class ReportSummary(
+    val reportId: Blob,
+    val challengeId: Blob,
+    val executorName: String,
+    val endedAtWallMs: Long,
+    val attempt: Int,
+    val endCause: SessionEndCause
+) {
+    companion object {
+        fun from(report: ChallengeReport) = ReportSummary(report.reportId, report.challengeId,
+            report.executorName, report.endedAtWallMs, report.attempt, report.endCause)
+    }
+}
+
+data class ReportListItem(val report: ReportSummary, val challengeTitle: String, val receivedAtMs: Long = 0L)
+
 /** A report received for one of the author's own challenges. */
 data class IncomingReport(val report: ChallengeReport, val challenge: AuthoredChallenge, val receivedAtMs: Long)
 
@@ -48,6 +65,7 @@ class ChallengeRepository(
     private val receivedDir = File(root, "received")
     private val outgoingDir = File(root, "reports_out")
     private val incomingDir = File(root, "reports_in")
+    private val indexDir = File(root, "report_index_${domain.name}")
     private val reportContextDir = File(root, "report_context")
     private val audioDir = File(root, "audio")
     private val prefs = context.getSharedPreferences(
@@ -109,13 +127,8 @@ class ChallengeRepository(
         preserveOutgoingContext(id)
         // Select by the container header, without needing the key we are deleting or
         // inflating every recording in the inbox. This also removes old orphan files.
-        listFiles(incomingDir, ".pgreport").filter { file ->
-            runCatching {
-                val header = ByteArray(ChallengeFiles.REPORT_HEADER_SIZE)
-                DataInputStream(file.inputStream()).use { it.readFully(header) }
-                files.reportChallengeId(header) == id
-            }.getOrDefault(false)
-        }.forEach { it.delete() }
+        listFiles(incomingDir, ".pgreport").filter { reportChallengeId(it) == id }
+            .forEach { deleteReportFile(it) }
         File(authoredDir, id.toHex() + ".bin").delete()
         File(audioDir, id.toHex()).deleteRecursively()
     }
@@ -172,6 +185,7 @@ class ChallengeRepository(
             if (!known) {
                 writeAtomically(file, bytes)
                 prefs.edit().putLong(PREF_RECEIVED_AT + report.reportId.toHex(), nowMs).apply()
+                cacheReportItem(file, ReportListItem(ReportSummary.from(report), authored.spec.title, nowMs))
             }
             return ImportResult.ReportImported(IncomingReport(report, authored, receivedAt(report.reportId)), known)
         }
@@ -237,26 +251,47 @@ class ChallengeRepository(
     // Reports
 
     fun saveOutgoingReport(report: ChallengeReport, spec: ChallengeSpec? = null) = synchronized(lock) {
-        (spec ?: runnableChallenge(report.challengeId))?.let {
+        val context = spec ?: runnableChallenge(report.challengeId) ?: readReportContext(report.challengeId)
+        context?.let {
             require(it.id == report.challengeId)
             saveReportContext(it)
         }
-        writeAtomically(File(outgoingDir, report.reportId.toHex() + ".report"), ReportCodec.encode(report))
+        val file = File(outgoingDir, report.reportId.toHex() + ".report")
+        indexFile(file).delete()
+        writeAtomically(file, ReportCodec.encode(report))
+        cacheReportItem(file, ReportListItem(ReportSummary.from(report), context?.title.orEmpty()))
     }
 
-    fun outgoingReports(): List<OutgoingReport> = synchronized(lock) {
-        listFiles(outgoingDir, ".report").mapNotNull { file ->
-            val report = runCatching { ReportCodec.decode(file.readBytes()) }.getOrNull() ?: return@mapNotNull null
-            OutgoingReport(report, (readReportContext(report.challengeId) ?: runnableChallenge(report.challengeId))?.title.orEmpty())
-        }.sortedByDescending { it.report.endedAtWallMs }
+    fun outgoingReports(): List<ReportListItem> = synchronized(lock) {
+        listFiles(outgoingDir, ".report").mapNotNull(::outgoingItem)
+            .sortedByDescending { it.report.endedAtWallMs }
+    }
+
+    /** Only the selected recording is loaded for export. */
+    fun outgoingReport(reportId: Blob): OutgoingReport? = synchronized(lock) {
+        readOutgoing(File(outgoingDir, reportId.toHex() + ".report"))
+            ?.takeIf { it.report.reportId == reportId }
+    }
+
+    private fun readOutgoing(file: File): OutgoingReport? = runCatching {
+        val report = ReportCodec.decode(file.readBytes())
+        OutgoingReport(report, (readReportContext(report.challengeId) ?: runnableChallenge(report.challengeId))?.title.orEmpty())
+    }.getOrNull()
+
+    private fun outgoingItem(file: File): ReportListItem? = reportItem(file) {
+        readOutgoing(file)?.let { ReportListItem(ReportSummary.from(it.report), it.challengeTitle) }
     }
 
     fun deleteOutgoing(reportId: Blob) = synchronized(lock) {
         val file = File(outgoingDir, reportId.toHex() + ".report")
-        val id = runCatching { ReportCodec.decode(file.readBytes()).challengeId }.getOrNull()
-        if (file.delete() && id != null && !hasOutgoingReports(id)) {
+        val id = outgoingItem(file)?.report?.challengeId
+        if (deleteReportFile(file) && id != null && !hasOutgoingReports(id)) {
             File(reportContextDir, id.toHex() + ".bin").delete()
         }
+    }
+
+    fun reportFile(reportId: Blob, executorName: String, comment: String): ByteArray? = synchronized(lock) {
+        outgoingReport(reportId)?.let { reportFile(it.report, executorName, comment) }
     }
 
     /** Sealed report file for the author, with the executor's name and comment. */
@@ -286,15 +321,19 @@ class ChallengeRepository(
     }
 
     private fun hasOutgoingReports(id: Blob): Boolean = listFiles(outgoingDir, ".report").any {
-        runCatching { ReportCodec.decode(it.readBytes()).challengeId == id }.getOrDefault(false)
+        outgoingItem(it)?.report?.challengeId == id
     }
 
-    fun incomingReports(): List<IncomingReport> = synchronized(lock) {
+    fun incomingReports(challengeId: Blob? = null): List<ReportListItem> = synchronized(lock) {
         listFiles(incomingDir, ".pgreport").mapNotNull { file ->
-            val result = files.decodeReport(file.readBytes(), ::authoredChallengeUnlocked)
-            (result as? ChallengeFileResult.Ok)?.value?.let { (report, authored) ->
-                IncomingReport(report, authored, receivedAt(report.reportId))
-            }
+            // The unauthenticated header is only a filter; cache creation authenticates the file.
+            if (challengeId != null && reportChallengeId(file) != challengeId) return@mapNotNull null
+            reportItem(file) {
+                val result = files.decodeReport(file.readBytes(), ::authoredChallengeUnlocked)
+                (result as? ChallengeFileResult.Ok)?.value?.let { (report, authored) ->
+                    ReportListItem(ReportSummary.from(report), authored.spec.title, receivedAt(report.reportId))
+                }
+            }?.takeIf { File(authoredDir, it.report.challengeId.toHex() + ".bin").isFile }
         }.sortedByDescending { it.receivedAtMs }
     }
 
@@ -309,7 +348,61 @@ class ChallengeRepository(
     }
 
     fun deleteIncoming(reportId: Blob) = synchronized(lock) {
-        File(incomingDir, reportId.toHex() + ".pgreport").delete()
+        deleteReportFile(File(incomingDir, reportId.toHex() + ".pgreport"))
+    }
+
+    private fun reportChallengeId(file: File): Blob? = runCatching {
+        val header = ByteArray(ChallengeFiles.REPORT_HEADER_SIZE)
+        DataInputStream(file.inputStream()).use { it.readFully(header) }
+        files.reportChallengeId(header)
+    }.getOrNull()
+
+    private fun indexFile(file: File) = File(indexDir, file.name + ".bin")
+
+    private fun deleteReportFile(file: File): Boolean = file.delete().also { deleted ->
+        if (deleted || !file.exists()) indexFile(file).delete()
+    }
+
+    /** Rebuild older/missing indexes one report at a time; full recordings never enter a list. */
+    private fun reportItem(file: File, load: () -> ReportListItem?): ReportListItem? {
+        val cached = runCatching {
+            val index = indexFile(file)
+            require(index.length() in 1..MAX_INDEX_BYTES)
+            val r = TlvReader(index.readBytes())
+            require(r.int(1) == 1 && r.long(2) == file.length() && r.long(3) == file.lastModified())
+            val reportId = Blob(r.requireBytes(4))
+            val challengeId = Blob(r.requireBytes(5))
+            require(reportId.size == ChallengeSpec.ID_SIZE && challengeId.size == ChallengeSpec.ID_SIZE)
+            require(reportId.toHex() == file.nameWithoutExtension)
+            ReportListItem(
+                ReportSummary(reportId, challengeId, r.string(6).orEmpty(), r.long(7) ?: 0L,
+                    r.int(8) ?: 0, r.enum(9, SessionEndCause.Surrendered)),
+                r.string(10).orEmpty(), r.long(11) ?: 0L
+            )
+        }.getOrNull()
+        if (cached != null) return cached
+        return load()?.also { cacheReportItem(file, it) }
+    }
+
+    /** An optional, rebuildable local cache; a failed cache write must not lose a saved report. */
+    private fun cacheReportItem(file: File, item: ReportListItem) {
+        try {
+            writeAtomically(indexFile(file), TlvWriter().apply {
+                int(1, 1)
+                long(2, file.length())
+                long(3, file.lastModified())
+                bytes(4, item.report.reportId.bytes)
+                bytes(5, item.report.challengeId.bytes)
+                string(6, item.report.executorName)
+                long(7, item.report.endedAtWallMs)
+                int(8, item.report.attempt)
+                enum(9, item.report.endCause)
+                string(10, item.challengeTitle)
+                long(11, item.receivedAtMs)
+            }.toByteArray())
+        } catch (_: java.io.IOException) {
+            // The report itself is authoritative and will rebuild this cache on the next read.
+        }
     }
 
     private fun authoredChallengeUnlocked(id: Blob): AuthoredChallenge? = readAuthored(File(authoredDir, id.toHex() + ".bin"))
@@ -344,5 +437,6 @@ class ChallengeRepository(
         const val PREF_EXECUTOR_NAME = "executor_name"
         const val PREF_ATTEMPTS = "attempts_"
         const val PREF_RECEIVED_AT = "received_at_"
+        const val MAX_INDEX_BYTES = 16L * 1024
     }
 }

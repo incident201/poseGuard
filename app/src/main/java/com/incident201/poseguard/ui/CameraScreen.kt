@@ -331,16 +331,12 @@ fun CameraScreen(
             viewModel.dismissFinalScreen()
         }
     }
-    val startFromFinalScreen = {
-        if (isFinalState) {
-            if (!isTimelapseSaving) {
-                pendingTimelapseFile?.delete()
-                pendingTimelapseFile = null
-                timelapseUiState = TimelapseUiState.Disabled
-                viewModel.startSession()
-            }
-        } else {
-            viewModel.startSession()
+    val startFromFinalScreen: () -> Unit = {
+        if ((!isFinalState || !isTimelapseSaving) && viewModel.startSession() && isFinalState) {
+            // A rejected retry must keep the previous result's unsaved video available.
+            pendingTimelapseFile?.delete()
+            pendingTimelapseFile = null
+            timelapseUiState = TimelapseUiState.Disabled
         }
     }
 
@@ -1214,6 +1210,7 @@ fun CameraScreen(
         SendReportDialog(
             viewModel = viewModel,
             language = gameSettings.language,
+            reportId = reportToSend.reportId,
             report = reportToSend,
             challengeTitle = activeChallenge?.spec?.title.orEmpty(),
             onDismiss = { showSendReport = false }

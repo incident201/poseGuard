@@ -2220,19 +2220,20 @@ class GameViewModel internal constructor(
         pauseIntifaceSessionSignals()
     }
 
-    fun startSession() = synchronized(processingLock) {
-        if (_gameState.value != GameState.Idle && _gameState.value != GameState.Failed && _gameState.value != GameState.Success) return@synchronized
+    /** True only when a new attempt was accepted; callers may then discard the previous result's media. */
+    fun startSession(): Boolean = synchronized(processingLock) {
+        if (_gameState.value != GameState.Idle && _gameState.value != GameState.Failed && _gameState.value != GameState.Success) return@synchronized false
 
         val challenge = _activeChallenge.value?.spec
         val rules = sessionRules
         if (challenge != null && challenge.rules.intifaceRequired && !isIntifaceRuntimeReady(rules)) {
             _challengeMessage.value = ChallengeMessage.IntifaceRequired
-            return@synchronized
+            return@synchronized false
         }
         val attempt = if (challenge != null) {
             challengeRepository.beginAttempt(challenge) ?: run {
                 _challengeMessage.value = ChallengeMessage.NoAttemptsLeft
-                return@synchronized
+                return@synchronized false
             }
         } else {
             0
@@ -2305,6 +2306,7 @@ class GameViewModel internal constructor(
                 completeDeviceStabilization()
             }
         }
+        true
     }
 
     private fun startPoseCountdownAfterDeviceStabilized() {

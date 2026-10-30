@@ -166,6 +166,19 @@ class ReportVerifierTest {
         assertTrue(ReplayReportVerifier.verify(report(duration = 3500), spec()).reasons.contains("timing"))
     }
 
+    @Test fun externalInterruptionAtFaceDeadlineIsAllowedButContinuedTrackingIsNot() {
+        val s = spec(ChallengeRules(timer = TimerSpec(exactSeconds = 60),
+            faceCheckMode = FaceCheckMode.FaceToCamera, intifaceRequired = true))
+        val beforeDeadline = report(s, duration = 4950, face = FaceDetectionStatus.Error,
+            cause = SessionEndCause.IntifaceUnavailable)
+        val atDeadline = beforeDeadline.copy(endedAtMonoMs = 15050, endedAtWallMs = 25050, actualTimerSeconds = 5)
+        for (cause in listOf(SessionEndCause.IntifaceUnavailable, SessionEndCause.CameraNoFrame, SessionEndCause.Surrendered)) {
+            assertEquals(Verdict(VerdictKind.Confirmed), ReplayReportVerifier.verify(atDeadline.copy(endCause = cause), s))
+            val continued = report(s, duration = 5500, face = FaceDetectionStatus.Error, cause = cause)
+            assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(continued, s).kind)
+        }
+    }
+
     @Test fun requiredIntifaceCannotConfirmSuccessWithoutAConnection() {
         val s = spec().copy(rules = spec().rules.copy(intifaceRequired = true))
         val disconnected = report(s)

@@ -21,9 +21,14 @@ data class TraceViolationEvent(
     val atMs: Long,
     val type: TraceViolationType,
     val violationIndex: Int,
+    /** Configured minutes in format v2, including when time penalties are disabled. */
     val penaltyMinutes: Int,
     val defeat: Boolean
-)
+) {
+    /** Keep old files/replay compatible while displaying only time that was actually added. */
+    fun appliedPenaltyMinutes(rules: ChallengeRules): Int =
+        if (rules.penaltiesEnabled && !defeat) penaltyMinutes else 0
+}
 
 /** Recorded tracking from the moment the reference pose was taken. */
 class SessionTrace(

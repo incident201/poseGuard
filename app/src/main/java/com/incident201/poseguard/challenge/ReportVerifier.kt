@@ -161,8 +161,11 @@ object ReplayReportVerifier : ReportVerifier {
                 SessionEndCause.TooManyViolations -> if (defeatedAt == null || end - defeatedAt > 1_000) mismatch += "result"
                 SessionEndCause.FaceCheckUnavailable -> if (!faceTimedOut || defeatedAt != null) mismatch += "result"
                 SessionEndCause.CameraNoBody -> mismatch += "result" // Only before reference acquisition.
+                // External interruptions may win before the face watchdog runs. In particular,
+                // the live session checks required Intiface before checking the face timeout.
+                // Frames processed after that timeout are still rejected above.
                 SessionEndCause.CameraNoFrame, SessionEndCause.Surrendered,
-                SessionEndCause.IntifaceUnavailable -> if (defeatedAt != null || faceTimedOut) mismatch += "result"
+                SessionEndCause.IntifaceUnavailable -> if (defeatedAt != null) mismatch += "result"
             }
         }
         return when {

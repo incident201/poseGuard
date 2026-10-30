@@ -156,7 +156,7 @@ class ChallengeExchangeScenarioTest {
 
         ActivityScenario.launch<MainActivity>(streamIntent(shared(reportFile, "report.pgreport"))).use {
             awaitCondition("report for the author", 10_000) {
-                appRepository.incomingReports().any { it.report.reportId == report.reportId && it.report.executorComment == "from another phone" }
+                appRepository.incomingReport(report.reportId)?.report?.executorComment == "from another phone"
             }
         }
     }

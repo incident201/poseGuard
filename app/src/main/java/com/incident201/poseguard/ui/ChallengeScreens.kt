@@ -61,8 +61,7 @@ import com.incident201.poseguard.challenge.ChallengeFiles
 import com.incident201.poseguard.challenge.ChallengeReport
 import com.incident201.poseguard.challenge.ChallengeSpec
 import com.incident201.poseguard.challenge.ImportResult
-import com.incident201.poseguard.challenge.IncomingReport
-import com.incident201.poseguard.challenge.OutgoingReport
+import com.incident201.poseguard.challenge.ReportListItem
 import com.incident201.poseguard.challenge.QrCodes
 import com.incident201.poseguard.challenge.ReceivedChallenge
 import com.incident201.poseguard.challenge.ReportVerifier
@@ -289,6 +288,7 @@ private fun ChallengeHub(
     modifier: Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val repository = viewModel.challengeRepository
     var tab by rememberSaveable(initialTab) { mutableIntStateOf(initialTab) }
     var localRefresh by remember { mutableIntStateOf(0) }
@@ -297,7 +297,7 @@ private fun ChallengeHub(
     val authored = rememberLoaded(key) { repository.authoredChallenges() }
     val outgoing = rememberLoaded(key) { repository.outgoingReports() }
     val incoming = rememberLoaded(key) { repository.incomingReports() }
-    var sendingReport by remember { mutableStateOf<OutgoingReport?>(null) }
+    var sendingReport by remember { mutableStateOf<ReportListItem?>(null) }
     val pasteEmptyText = localizedString(language, R.string.challenge_paste_empty)
 
     val openFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -370,6 +370,12 @@ private fun ChallengeHub(
                 outgoing,
                 incoming,
                 onSend = { sendingReport = it },
+                onDeleteOutgoing = { item ->
+                    scope.launch {
+                        withContext(Dispatchers.IO) { repository.deleteOutgoing(item.report.reportId) }
+                        localRefresh += 1
+                    }
+                },
                 onOpenIncoming = { onNavigate(ChallengePage.Report(it.report.reportId)) }
             )
         }
@@ -379,7 +385,7 @@ private fun ChallengeHub(
         SendReportDialog(
             viewModel = viewModel,
             language = language,
-            report = outgoingReport.report,
+            reportId = outgoingReport.report.reportId,
             challengeTitle = outgoingReport.challengeTitle,
             onDismiss = { sendingReport = null }
         )
@@ -414,7 +420,7 @@ private fun attemptsText(language: AppLanguage, attemptsLeft: Int?): String = wh
 private fun AuthoredList(
     language: AppLanguage,
     items: List<AuthoredChallenge>?,
-    incoming: List<IncomingReport>?,
+    incoming: List<ReportListItem>?,
     onOpen: (AuthoredChallenge) -> Unit
 ) {
     when {
@@ -435,10 +441,11 @@ private fun AuthoredList(
 @Composable
 private fun ReportsList(
     language: AppLanguage,
-    outgoing: List<OutgoingReport>?,
-    incoming: List<IncomingReport>?,
-    onSend: (OutgoingReport) -> Unit,
-    onOpenIncoming: (IncomingReport) -> Unit
+    outgoing: List<ReportListItem>?,
+    incoming: List<ReportListItem>?,
+    onSend: (ReportListItem) -> Unit,
+    onDeleteOutgoing: (ReportListItem) -> Unit,
+    onOpenIncoming: (ReportListItem) -> Unit
 ) {
     if (outgoing == null || incoming == null) {
         EmptyText(localizedString(language, R.string.report_loading))
@@ -453,7 +460,7 @@ private fun ReportsList(
         Spacer(Modifier.height(8.dp))
         incoming.forEach { item ->
             ListCard(
-                title = item.challenge.spec.title,
+                title = item.challengeTitle,
                 subtitle = item.report.executorName.ifBlank { localizedString(language, R.string.report_anonymous) } +
                     " · " + formatDate(item.report.endedAtWallMs),
                 detail = localizedString(language, endCauseLabel(item.report.endCause)),
@@ -474,6 +481,7 @@ private fun ReportsList(
                     localizedString(language, R.string.challenge_send_report),
                 onClick = { onSend(item) }
             )
+            DeleteButton(language) { onDeleteOutgoing(item) }
         }
     }
 }
@@ -1004,7 +1012,7 @@ private fun ChallengeBrief(
     val loaded = rememberLoaded(Triple(id, refreshKey, localRefresh)) {
         val authored = repository.authoredChallenge(id)
         val received = repository.receivedChallenge(id)
-        val reports = if (authored != null) repository.incomingReports().filter { it.report.challengeId == id } else emptyList()
+        val reports = if (authored != null) repository.incomingReports(id) else emptyList()
         Triple(authored, received, reports)
     }
     val intifaceState by viewModel.intifaceState.collectAsState()
@@ -1282,8 +1290,9 @@ private fun challengeRuleRows(
 internal fun SendReportDialog(
     viewModel: GameViewModel,
     language: AppLanguage,
-    report: ChallengeReport,
+    reportId: Blob,
     challengeTitle: String,
+    report: ChallengeReport? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1323,8 +1332,10 @@ internal fun SendReportDialog(
                     val file = withContext(Dispatchers.IO) {
                         val repository = viewModel.challengeRepository
                         repository.executorName = name
-                        repository.reportFile(report, name, comment)?.let { bytes ->
-                            ChallengeShare.stage(context, bytes, ChallengeShare.fileName(challengeTitle, ChallengeFiles.REPORT_EXTENSION))
+                        val bytes = if (report != null) repository.reportFile(report, name, comment)
+                            else repository.reportFile(reportId, name, comment)
+                        bytes?.let { data ->
+                            ChallengeShare.stage(context, data, ChallengeShare.fileName(challengeTitle, ChallengeFiles.REPORT_EXTENSION))
                         }
                     }
                     sending = false
@@ -1473,7 +1484,8 @@ private fun ReportScreen(
                 val outcome = if (event.defeat) {
                     localizedString(language, R.string.report_event_defeat)
                 } else {
-                    localizedFormatString(language, R.string.report_event_penalty, event.penaltyMinutes)
+                    localizedFormatString(language, R.string.report_event_penalty,
+                        event.appliedPenaltyMinutes(item.challenge.spec.rules))
                 }
                 InfoRow("${formatDurationHms(((event.atMs - start) / 1000L).coerceAtLeast(0L))}  #${event.violationIndex} $what", outcome)
             }

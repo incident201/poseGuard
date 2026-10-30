@@ -207,7 +207,7 @@ class ChallengeExchangeTest {
         val restarted = participant("executor")
         val outgoing = restarted.outgoingReports().single()
         assertEquals(spec.title, outgoing.challengeTitle)
-        val exported = restarted.reportFile(outgoing.report, "Anna", "sent later")!!
+        val exported = restarted.reportFile(outgoing.report.reportId, "Anna", "sent later")!!
         val incoming = (author.import(exported) as ImportResult.ReportImported).report.report
         assertEquals(original.reportId, incoming.reportId)
         assertEquals("Anna", incoming.executorName)
@@ -223,7 +223,7 @@ class ChallengeExchangeTest {
         executor.deleteReceived(spec.id)
         val outgoing = executor.outgoingReports().single()
         assertEquals(spec.title, outgoing.challengeTitle)
-        assertTrue(author.import(executor.reportFile(outgoing.report, "", "")!!) is ImportResult.ReportImported)
+        assertTrue(author.import(executor.reportFile(outgoing.report.reportId, "", "")!!) is ImportResult.ReportImported)
     }
 
     @Test fun deletingAnOwnTestTaskAlsoKeepsItsOutgoingReportsSendable() {
@@ -232,7 +232,7 @@ class ChallengeExchangeTest {
         author.deleteAuthored(spec.id)
         val outgoing = author.outgoingReports().single()
         assertEquals(spec.title, outgoing.challengeTitle)
-        assertNotNull(author.reportFile(outgoing.report, "", ""))
+        assertNotNull(author.reportFile(outgoing.report.reportId, "", ""))
     }
 
     @Test fun deletingAnAuthoredTaskRemovesItsReportFilesAndKeepsOtherTasksReports() {
