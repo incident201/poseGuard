@@ -15,7 +15,7 @@ import com.incident201.poseguard.viewmodel.toRuleViolationType
 
 
 enum class VerdictKind {
-    /** No check was made; the report is shown as the executor's app wrote it. */
+    /** The recording is absent or incomplete, so the outcome cannot be fully verified. */
     Unverified,
     Confirmed,
     Suspicious,
@@ -149,13 +149,15 @@ object ReplayReportVerifier : ReportVerifier {
         }
         if (impossibleTiming) return Verdict(VerdictKind.Suspicious, listOf("timing"))
         if (count != trace.frameCount) mismatch += "trace"
-        if (count == 0 || end - previousTs > 5_000) suspicious += "trace"
+        val emptyTrace = count == 0
+        val cameraStopped = report.endCause == SessionEndCause.CameraNoFrame && end - previousTs > 5_000
+        if (end - previousTs > 5_000 && !cameraStopped) suspicious += "trace"
         if (report.actualTimerSeconds != clock.snapshot(end).elapsedSeconds) mismatch += "result"
         if (!trace.truncated) {
             if (engine.counts != report.counts || events != report.events) mismatch += "events"
             val faceTimedOut = outageSince?.let { end - it >= 5_000 } == true
             when (report.endCause) {
-                SessionEndCause.Completed -> if (defeatedAt != null || outageSince != null || !clock.snapshot(end).finished || end - previousTs > 5_000) mismatch += "result"
+                SessionEndCause.Completed -> if (emptyTrace || defeatedAt != null || outageSince != null || !clock.snapshot(end).finished || end - previousTs > 5_000) mismatch += "result"
                 SessionEndCause.TooManyViolations -> if (defeatedAt == null || end - defeatedAt > 1_000) mismatch += "result"
                 SessionEndCause.FaceCheckUnavailable -> if (!faceTimedOut || defeatedAt != null) mismatch += "result"
                 SessionEndCause.CameraNoBody -> mismatch += "result" // Only before reference acquisition.
@@ -166,6 +168,8 @@ object ReplayReportVerifier : ReportVerifier {
         return when {
             mismatch.isNotEmpty() -> Verdict(VerdictKind.Mismatch, mismatch.toList())
             suspicious.isNotEmpty() -> Verdict(VerdictKind.Suspicious, suspicious.toList())
+            emptyTrace -> Verdict(VerdictKind.Unverified, listOf("no_trace"))
+            cameraStopped -> Verdict(VerdictKind.Unverified, listOf("camera_no_frame"))
             else -> Verdict(VerdictKind.Confirmed)
         }
     }

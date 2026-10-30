@@ -74,6 +74,38 @@ class ChallengeFormatTest {
         assertTrue(rules.audioClips.isEmpty())
     }
 
+    @Test fun disabledAudioCustomizationIsNotCopiedIntoTasks() {
+        val settings = GameSettings(customizeAudioEnabled = false,
+            customTtsTemplates = mapOf(TtsPhraseTemplate.TakePosition to "Disabled phrase"),
+            audioCueSettings = mapOf(AudioCue.TakePosition to AudioCueSettings(mode = AudioCueMode.Pcm)))
+        val rules = ChallengeRules.from(settings, TimerSpec())
+        assertTrue(rules.customTtsTemplates.isEmpty())
+        assertTrue(rules.audioCueSettings.values.all { it.mode == AudioCueMode.UseTts })
+        assertEquals(false, rules.customizeAudioEnabled)
+        assertEquals("Disabled phrase", settings.customTtsTemplates[TtsPhraseTemplate.TakePosition])
+    }
+
+    @Test fun tasksWithOnlyCustomSpeechKeepItEnabledThroughFileExchange() {
+        val settings = GameSettings(customizeAudioEnabled = true,
+            customTtsTemplates = mapOf(TtsPhraseTemplate.TakePosition to "Author's phrase"))
+        val rules = ChallengeRules.from(settings, TimerSpec())
+        assertTrue(rules.customizeAudioEnabled)
+        val decoded = (files.decodeTask(files.encodeTask(spec(rules))) as ChallengeFileResult.Ok).value.rules
+        assertTrue(decoded.customizeAudioEnabled)
+        val applied = decoded.applyTo(GameSettings(customizeAudioEnabled = false))
+        assertTrue(applied.customizeAudioEnabled)
+        assertEquals("Author's phrase", applied.customTtsTemplates[TtsPhraseTemplate.TakePosition])
+    }
+
+    @Test fun legacySpeechOnlyTaskIsEnabledAfterNormalization() {
+        val legacy = ChallengeRules(customizeAudioEnabled = false,
+            customTtsTemplates = mapOf(TtsPhraseTemplate.TimeIsUp to "Legacy phrase"))
+        assertTrue(legacy.normalized().customizeAudioEnabled)
+        val invalid = ChallengeRules(customTtsTemplates = mapOf(
+            TtsPhraseTemplate.PenaltyAddedToTimer to "Q".repeat(ChallengeRules.MAX_PHRASE_LENGTH) + "{minutes}"))
+        assertEquals(false, invalid.normalized().customizeAudioEnabled)
+    }
+
     @Test fun embeddedAudioTravelsWithTheTask() {
         val clip = AudioClip("audio/ogg", Blob(ByteArray(5_000) { it.toByte() }))
         val rules = ChallengeRules(

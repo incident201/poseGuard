@@ -41,7 +41,7 @@
     <string name="challenge_hidden_value">Скрыто</string>
     <string name="challenge_range_value">%1$s – %2$s</string>
     <string name="challenge_errors_value">Поражение на %1$d-й</string>
-    <string name="challenge_errors_none">Без ограничения</string>
+    <string name="challenge_errors_none">Ошибки не допускаются</string>
     <string name="challenge_intiface_off">Не используется</string>
     <string name="challenge_intiface_used">Используется, если устройство подключено</string>
     <string name="challenge_intiface_used_required">Нужно устройство</string>

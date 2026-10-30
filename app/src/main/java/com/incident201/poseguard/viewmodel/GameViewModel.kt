@@ -314,7 +314,9 @@ data class SessionSummary(
     val violationCounts: RuleViolationCounts,
     val settings: GameSettings,
     val defeatReason: String = "",
-    val stoppedByTechnicalError: Boolean = false
+    val stoppedByTechnicalError: Boolean = false,
+    /** Visibility belongs to this attempt, even after another challenge is selected. */
+    val showInitialTimer: Boolean = true
 )
 
 /** One-shot challenge notices for the UI. */
@@ -2164,7 +2166,8 @@ class GameViewModel internal constructor(
             initialTimerSeconds = sessionInitialTimerSeconds,
             actualTimerSeconds = sessionElapsedSecondsForSummary(),
             violationCounts = _ruleViolationCounts.value,
-            settings = sessionSettingsSnapshot
+            settings = sessionSettingsSnapshot,
+            showInitialTimer = _activeChallenge.value?.spec?.visibility?.showDuration != false
         )
         finishChallengeSession(SessionEndCause.Completed, intifaceSnapshot)
         _gameState.value = GameState.Success
@@ -2461,7 +2464,8 @@ class GameViewModel internal constructor(
             violationCounts = _ruleViolationCounts.value,
             settings = sessionSettingsSnapshot,
             defeatReason = reason,
-            stoppedByTechnicalError = stoppedByTechnicalError
+            stoppedByTechnicalError = stoppedByTechnicalError,
+            showInitialTimer = _activeChallenge.value?.spec?.visibility?.showDuration != false
         )
         finishChallengeSession(cause)
         _gameState.value = GameState.Failed
@@ -2486,10 +2490,12 @@ class GameViewModel internal constructor(
         TtsPhraseTemplate.PenaltyAddedToTimer -> tr(R.string.penalty_added_to_timer_template)
     }
 
-    private fun ttsText(template: TtsPhraseTemplate): String =
-        sessionRules.customTtsTemplates[template]
-            ?.takeIf { it.isNotBlank() }
+    private fun ttsText(template: TtsPhraseTemplate): String {
+        val rules = sessionRules
+        return rules.customTtsTemplates[template]
+            ?.takeIf { rules.customizeAudioEnabled && it.isNotBlank() }
             ?: defaultTtsTemplateText(template)
+    }
 
     private fun ttsText(template: TtsPhraseTemplate, minutes: Int): String =
         ttsText(template).replace("{minutes}", minutes.toString())

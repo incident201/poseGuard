@@ -109,6 +109,35 @@ class ReportVerifierTest {
         val early = report().copy(trace = null, actualTimerSeconds = 0, endCause = SessionEndCause.Surrendered)
         assertEquals(VerdictKind.Unverified, ReplayReportVerifier.verify(early, spec()).kind)
     }
+
+    @Test fun cameraTimeoutIsUnverifiedWithoutHidingOtherInconsistencies() {
+        val s = spec(ChallengeRules(timer = TimerSpec(exactSeconds = 60)))
+        val original = report(s, duration = 500, cause = SessionEndCause.CameraNoFrame)
+        val stopped = original.copy(endedAtMonoMs = original.endedAtMonoMs + 5_100,
+            endedAtWallMs = original.endedAtWallMs + 5_100, actualTimerSeconds = 5)
+        assertEquals(Verdict(VerdictKind.Unverified, listOf("camera_no_frame")), ReplayReportVerifier.verify(stopped, s))
+        assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(stopped.copy(counts = RuleViolationCounts(face = 1)), s).kind)
+        assertEquals(VerdictKind.Suspicious, ReplayReportVerifier.verify(stopped.copy(endCause = SessionEndCause.Surrendered), s).kind)
+        assertEquals(VerdictKind.Suspicious, ReplayReportVerifier.verify(stopped.copy(endedAtWallMs = stopped.endedAtWallMs + 6_000), s).kind)
+        assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(stopped.copy(endCause = SessionEndCause.Completed), s).kind)
+    }
+
+    @Test fun emptyTraceCannotConfirmSuccessOrHideAlteredEvents() {
+        val s = spec(ChallengeRules(timer = TimerSpec(exactSeconds = 60)))
+        val stopped = report(s, duration = 0, cause = SessionEndCause.Surrendered)
+        assertEquals(0, stopped.trace!!.frameCount)
+        assertEquals(Verdict(VerdictKind.Unverified, listOf("no_trace")), ReplayReportVerifier.verify(stopped, s))
+        assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(stopped.copy(counts = RuleViolationCounts(face = 1)), s).kind)
+        val successWithoutFrames = stopped.copy(endCause = SessionEndCause.Completed,
+            endedAtMonoMs = 70_000, endedAtWallMs = 80_000, actualTimerSeconds = 60)
+        assertEquals(VerdictKind.Mismatch, ReplayReportVerifier.verify(successWithoutFrames, s).kind)
+        assertEquals(VerdictKind.Suspicious, ReplayReportVerifier.verify(
+            successWithoutFrames.copy(endCause = SessionEndCause.Surrendered), s).kind)
+        val trace = stopped.trace!!
+        val truncated = SessionTrace(trace.referenceTimestampMs, trace.reference, trace.clockStartedAtMs,
+            trace.initialFaceStatus, trace.frameData, trace.frameCount, true)
+        assertEquals(VerdictKind.Suspicious, ReplayReportVerifier.verify(stopped.copy(trace = truncated), s).kind)
+    }
     @Test fun malformedFrameStreamAndFrameCountAreRejected() {
         val r = report(); val t = r.trace!!
         val bad = SessionTrace(t.referenceTimestampMs,t.reference,t.clockStartedAtMs,t.initialFaceStatus,t.frameData.copyOf(t.frameData.size - 1),t.frameCount,false)

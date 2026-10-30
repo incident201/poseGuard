@@ -122,13 +122,9 @@ internal fun ChallengeFlow(
         viewModel.markChallengeIntroCompleted()
         onNavigate(target)
     }
-    BackHandler {
-        when (page) {
-            // Leaving the guide counts as having seen it.
-            is ChallengePage.Intro -> finishIntro(page.next)
-            is ChallengePage.Hub -> onNavigate(null)
-            else -> onNavigate(ChallengePage.Hub(tabFor(page)))
-        }
+    BackHandler(enabled = page is ChallengePage.Intro) {
+        // Leaving the guide counts as having seen it.
+        if (page is ChallengePage.Intro) finishIntro(page.next)
     }
     when (page) {
         is ChallengePage.Intro -> ChallengeIntro(language, page.next, finishIntro, modifier)
@@ -137,14 +133,6 @@ internal fun ChallengeFlow(
         is ChallengePage.Brief -> ChallengeBrief(viewModel, language, page.id, refreshKey, onNavigate, modifier)
         is ChallengePage.Report -> ReportScreen(viewModel, language, page.reportId, onNavigate, modifier)
     }
-}
-
-private fun tabFor(page: ChallengePage): Int = when (page) {
-    is ChallengePage.Intro -> tabFor(page.next)
-    is ChallengePage.Hub -> page.tab
-    ChallengePage.Editor -> 1
-    is ChallengePage.Brief -> 0
-    is ChallengePage.Report -> 2
 }
 
 // Shared layout
@@ -158,6 +146,7 @@ private fun ChallengeScaffold(
     actions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
+    BackHandler(onBack = onBack)
     val colorScheme = MaterialTheme.colorScheme
     Column(
         modifier = modifier
@@ -1415,6 +1404,7 @@ private fun ReportScreen(
                     "events" -> R.string.report_reason_events
                     "intiface" -> R.string.report_reason_intiface
                     "no_trace" -> R.string.report_reason_no_trace
+                    "camera_no_frame" -> R.string.camera_no_frame
                     else -> R.string.report_reason_result
                 })
             }.joinToString(prefix = if (verdict?.reasons.isNullOrEmpty()) "" else ": "),

@@ -81,7 +81,6 @@ import com.incident201.poseguard.tracker.AccelerationState
 import com.incident201.poseguard.tracker.Point3D
 import com.incident201.poseguard.tracker.PoseLandmarkerService
 import com.incident201.poseguard.challenge.ChallengeFiles
-import com.incident201.poseguard.challenge.ChallengeSpec
 import com.incident201.poseguard.challenge.QrCodes
 import com.incident201.poseguard.viewmodel.AppLanguage
 import com.incident201.poseguard.viewmodel.ChallengeMessage
@@ -955,7 +954,6 @@ fun CameraScreen(
                     FinalSessionScreen(
                         summary = sessionSummary!!,
                         language = gameSettings.language,
-                        challenge = activeChallenge?.spec,
                         onSendReport = if (challengeReport != null) {
                             { showSendReport = true }
                         } else {
@@ -1394,7 +1392,6 @@ private fun PoseDebugSaveButton(
 private fun FinalSessionScreen(
     summary: SessionSummary,
     language: AppLanguage,
-    challenge: ChallengeSpec?,
     onSendReport: (() -> Unit)?,
     pendingTimelapseFile: File?,
     timelapseUiState: TimelapseUiState,
@@ -1447,14 +1444,13 @@ private fun FinalSessionScreen(
                     }
 
                     Spacer(Modifier.height(20.dp))
-                    val durationShown = challenge == null || challenge.visibility.showDuration
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         FinalMetricCard(
                             label = localizedString(language, R.string.final_initial_timer),
-                            value = if (durationShown) formatDurationHms(summary.initialTimerSeconds) else "??:??:??",
+                            value = if (summary.showInitialTimer) formatDurationHms(summary.initialTimerSeconds) else "??:??:??",
                             modifier = Modifier.weight(1f)
                         )
                         FinalMetricCard(

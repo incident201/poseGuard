@@ -41,7 +41,7 @@
     <string name="challenge_hidden_value">Verborgen</string>
     <string name="challenge_range_value">%1$s – %2$s</string>
     <string name="challenge_errors_value">Niederlage beim %1$d.</string>
-    <string name="challenge_errors_none">Keine Grenze</string>
+    <string name="challenge_errors_none">Keine Fehler erlaubt</string>
     <string name="challenge_intiface_off">Nicht verwendet</string>
     <string name="challenge_intiface_used">Wird verwendet, wenn ein Gerät verbunden ist</string>
     <string name="challenge_intiface_used_required">Gerät erforderlich</string>

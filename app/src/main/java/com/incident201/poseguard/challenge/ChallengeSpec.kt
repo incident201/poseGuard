@@ -108,6 +108,7 @@ data class ChallengeRules(
 
     /** Values the editor and the decoder both accept, so a file cannot carry out-of-range rules. */
     fun normalized(): ChallengeRules {
+        val values = normalizedValues()
         val clips = portableClips()
         val cues = AudioCue.entries.associateWith { cue ->
             val cueSettings = (audioCueSettings[cue] ?: AudioCueSettings()).copy(audioFileUri = null)
@@ -115,10 +116,10 @@ data class ChallengeRules(
             if (cueSettings.mode == AudioCueMode.AudioFile && cue !in clips) cueSettings.copy(mode = AudioCueMode.UseTts)
             else cueSettings
         }
-        return normalizedValues().copy(
+        return values.copy(
             audioCueSettings = cues,
             audioClips = clips,
-            customizeAudioEnabled = cues.values.any { it.mode != AudioCueMode.UseTts }
+            customizeAudioEnabled = cues.values.any { it.mode != AudioCueMode.UseTts } || values.customTtsTemplates.isNotEmpty()
         )
     }
 
@@ -180,7 +181,7 @@ data class ChallengeRules(
             driftThresholdFactor = settings.driftThresholdFactor,
             motionThresholdFactor = settings.motionThresholdFactor,
             faceCheckMode = settings.faceCheckMode,
-            customTtsTemplates = settings.customTtsTemplates,
+            customTtsTemplates = if (settings.customizeAudioEnabled) settings.customTtsTemplates else emptyMap(),
             audioCueSettings = if (settings.customizeAudioEnabled) settings.audioCueSettings
                 else AudioCue.entries.associateWith { AudioCueSettings() },
             audioClips = clips,
