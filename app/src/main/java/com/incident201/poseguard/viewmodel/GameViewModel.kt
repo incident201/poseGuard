@@ -31,6 +31,7 @@ import com.incident201.poseguard.challenge.Blob
 import com.incident201.poseguard.challenge.ChallengeRules
 import com.incident201.poseguard.challenge.TimerSpec
 import com.incident201.poseguard.challenge.ChallengeFileError
+import com.incident201.poseguard.challenge.ChallengeFileKind
 import com.incident201.poseguard.challenge.ChallengeFiles
 import com.incident201.poseguard.challenge.ChallengeReport
 import com.incident201.poseguard.challenge.ChallengeRepository
@@ -2655,7 +2656,13 @@ class GameViewModel internal constructor(
     /** Outcome of the last opened challenge file, report file or pasted code. */
     val importResult: StateFlow<ImportResult?> = _importResult.asStateFlow()
 
-    fun importChallengeFromUri(uri: Uri) {
+    fun importChallengeFromUri(uri: Uri) = importFromUri(uri, expectedKind = null)
+
+    fun importTaskFromUri(uri: Uri) = importFromUri(uri, ChallengeFileKind.Task)
+
+    fun importReportFromUri(uri: Uri) = importFromUri(uri, ChallengeFileKind.Report)
+
+    private fun importFromUri(uri: Uri, expectedKind: ChallengeFileKind?) {
         viewModelScope.launch {
             _importResult.value = withContext(Dispatchers.IO) {
                 val bytes = runCatching {
@@ -2664,7 +2671,7 @@ class GameViewModel internal constructor(
                     }
                 }.getOrNull()
                 if (bytes == null) ImportResult.Failed(ChallengeFileError.NotAChallengeFile)
-                else challengeRepository.import(bytes)
+                else challengeRepository.import(bytes, expectedKind = expectedKind)
             }
         }
     }
@@ -2672,7 +2679,7 @@ class GameViewModel internal constructor(
     fun importChallengeFromText(text: String) {
         viewModelScope.launch {
             _importResult.value = withContext(Dispatchers.IO) {
-                challengeRepository.import(text.toByteArray(Charsets.UTF_8))
+                challengeRepository.import(text.toByteArray(Charsets.UTF_8), expectedKind = ChallengeFileKind.Task)
             }
         }
     }

@@ -13,6 +13,7 @@ import android.provider.MediaStore
 import android.view.WindowManager
 import android.view.inspector.WindowInspector
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
@@ -102,7 +103,7 @@ class ChallengeUiScenarioTest {
     private fun onChallengesHub(body: () -> Unit) = ActivityScenario.launch(MainActivity::class.java).use {
         awaitNode("main screen", hasText(text(R.string.start)))
         compose.onNodeWithContentDescription(text(R.string.challenges_title)).performClick()
-        awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+        awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
         body()
     }
 
@@ -111,6 +112,31 @@ class ChallengeUiScenarioTest {
     )
 
     private fun guideSeen() = app.getSharedPreferences("game_settings", Context.MODE_PRIVATE).getBoolean("challenge_intro_completed", false)
+
+    @Test fun eachTabShowsOnlyItsOwnImportOrCreateActions() {
+        onChallengesHub {
+            compose.onNodeWithText(text(R.string.challenge_add_file)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.challenge_add_code)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.challenge_add_qr)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.report_import)).assertDoesNotExist()
+
+            compose.onNodeWithText(text(R.string.challenges_tab_mine)).performClick()
+            compose.onNodeWithText(text(R.string.challenge_create)).assertIsDisplayed()
+            listOf(R.string.challenge_add_title, R.string.challenge_add_file, R.string.challenge_add_code,
+                R.string.challenge_add_qr, R.string.report_import)
+                .forEach { compose.onNodeWithText(text(it)).assertDoesNotExist() }
+
+            compose.onNodeWithText(text(R.string.challenges_tab_reports)).performClick()
+            compose.onNodeWithText(text(R.string.report_import)).assertIsDisplayed()
+            listOf(R.string.challenge_add_title, R.string.challenge_add_file, R.string.challenge_add_code,
+                R.string.challenge_add_qr, R.string.challenge_create)
+                .forEach { compose.onNodeWithText(text(it)).assertDoesNotExist() }
+
+            compose.onNodeWithText(text(R.string.challenges_tab_received)).performClick()
+            compose.onNodeWithText(text(R.string.challenge_add_file)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.report_import)).assertDoesNotExist()
+        }
+    }
 
     private fun openChallengesExpectingTheGuide() {
         awaitNode("main screen", hasText(text(R.string.start)))
@@ -123,12 +149,12 @@ class ChallengeUiScenarioTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             openChallengesExpectingTheGuide()
             compose.onNodeWithText(text(R.string.guide_skip)).performClick()
-            awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+            awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
             assertTrue(guideSeen())
             compose.onNodeWithContentDescription(text(R.string.back)).performClick()
             awaitNode("main screen", hasText(text(R.string.start)))
             compose.onNodeWithContentDescription(text(R.string.challenges_title)).performClick()
-            awaitNode("hub without the guide", hasText(text(R.string.challenge_add_title)))
+            awaitNode("hub without the guide", hasText(text(R.string.challenges_title)))
             assertTrue(compose.onAllNodes(hasText(text(R.string.challenge_intro_title_1))).fetchSemanticsNodes().isEmpty())
         }
     }
@@ -153,7 +179,7 @@ class ChallengeUiScenarioTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             openChallengesExpectingTheGuide()
             androidx.test.espresso.Espresso.pressBack()
-            awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+            awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
             assertTrue(guideSeen())
         }
     }
@@ -180,7 +206,7 @@ class ChallengeUiScenarioTest {
             compose.onNodeWithContentDescription(text(R.string.challenge_intro_help)).performClick()
             awaitNode("guide", hasText(text(R.string.challenge_intro_title_1)))
             compose.onNodeWithText(text(R.string.guide_skip)).performClick()
-            awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+            awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
         }
     }
 
@@ -226,9 +252,10 @@ class ChallengeUiScenarioTest {
             val copied = ChallengeFiles.fromTextCode(clipboard().orEmpty())
             assertEquals(ChallengeFileResult.Ok(spec), appRepository.files.decodeTask(copied!!))
 
-            // Back on the hub, "Code" pastes it: on the author's phone that is their own task.
+            // Task import belongs to Received; the copied code still opens the author's own task.
             compose.onNodeWithContentDescription(text(R.string.back)).performClick()
-            awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+            awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
+            compose.onNodeWithText(text(R.string.challenges_tab_received)).performClick()
             compose.onNodeWithText(text(R.string.challenge_add_code)).performClick()
             awaitNode("brief of the own task", hasText(text(R.string.challenge_test_run)))
             assertTrue(appRepository.receivedChallenges().none { it.spec.id == spec.id })
@@ -244,7 +271,7 @@ class ChallengeUiScenarioTest {
             Thread.sleep(1_000)
             assertNull(appRepository.receivedChallenge(spec.id))
             // Still on the hub: nothing was opened.
-            awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+            awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
         }
     }
 
@@ -266,7 +293,7 @@ class ChallengeUiScenarioTest {
                 InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(1_000, 5_000)
                 awaitNode("main screen", hasText(text(R.string.start)))
                 compose.onNodeWithContentDescription(text(R.string.challenges_title)).performClick()
-                awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+                awaitNode("challenges hub", hasText(text(R.string.challenges_title)))
                 compose.onNodeWithText(text(R.string.challenges_tab_mine)).performClick()
                 awaitNode("own task", hasText(spec.title))
                 compose.onNodeWithText(spec.title).performClick()

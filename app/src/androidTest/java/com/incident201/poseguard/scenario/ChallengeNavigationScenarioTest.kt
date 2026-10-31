@@ -68,7 +68,7 @@ class ChallengeNavigationScenarioTest {
     }
     private fun hub() {
         compose.onNodeWithTag("challenges_button").performClick()
-        await(hasText(text(R.string.challenge_add_title)))
+        await(hasText(text(R.string.challenges_title)))
     }
     private fun mineBrief(spec: ChallengeSpec) {
         compose.onNodeWithText(text(R.string.challenges_tab_mine)).performClick()
@@ -120,7 +120,7 @@ class ChallengeNavigationScenarioTest {
             // Actual Delete action on the active task calls leaveChallenge().
             hub(); receivedBrief(hidden)
             compose.onNodeWithText(text(R.string.challenge_delete)).performScrollTo().performClick()
-            await(hasText(text(R.string.challenge_add_title)))
+            await(hasText(text(R.string.challenges_title)))
             compose.onNodeWithContentDescription(text(R.string.back)).performClick()
             await(hasText("??:??:??"))
             assertTrue(compose.onAllNodes(hasText("00:01:47")).fetchSemanticsNodes().isEmpty())
@@ -134,11 +134,11 @@ class ChallengeNavigationScenarioTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             await(hasTestTag("start_button")); hub(); mineBrief(spec)
             compose.onNodeWithContentDescription(text(R.string.back)).performClick()
-            await(hasText(text(R.string.challenge_add_title)))
+            await(hasText(text(R.string.challenges_title)))
             compose.onNodeWithText(text(R.string.challenges_tab_mine)).assertIsSelected()
             mineBrief(spec)
             androidx.test.espresso.Espresso.pressBack()
-            await(hasText(text(R.string.challenge_add_title)))
+            await(hasText(text(R.string.challenges_title)))
             compose.onNodeWithText(text(R.string.challenges_tab_mine)).assertIsSelected()
         }
     }

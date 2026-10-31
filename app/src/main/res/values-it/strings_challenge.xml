@@ -140,6 +140,9 @@
     <string name="challenge_hidden_from_executor">nascosto all’esecutore</string>
     <string name="challenge_intiface_hint">Queste regole si applicano all’esecutore con il proprio dispositivo.</string>
     <string name="challenge_intiface_hint_offline">Intiface non è disponibile in questa versione, ma puoi impostare le regole: si applicano a un esecutore con la versione online e il proprio dispositivo.</string>
+    <string name="report_import">Importa resoconto</string>
+    <string name="challenge_import_task_expected">Questo è un resoconto. Importalo dalla scheda «Resoconti».</string>
+    <string name="challenge_import_report_expected">Questa è una sfida. Aggiungila dalla scheda «Ricevute».</string>
     <string name="challenge_add_title">Aggiungi una sfida</string>
     <string name="challenge_add_file">File</string>
     <string name="challenge_add_code">Codice</string>

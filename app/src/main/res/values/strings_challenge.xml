@@ -140,6 +140,9 @@
     <string name="challenge_hidden_from_executor">hidden from the executor</string>
     <string name="challenge_intiface_hint">These rules apply on the executor’s side with their own device.</string>
     <string name="challenge_intiface_hint_offline">Intiface is not available in this version, but you can still set the rules: they apply for an executor with the online version and their own device.</string>
+    <string name="report_import">Import report</string>
+    <string name="challenge_import_task_expected">This is a report. Import it from the Reports tab.</string>
+    <string name="challenge_import_report_expected">This is a challenge. Add it from the Received tab.</string>
     <string name="challenge_add_title">Add a challenge</string>
     <string name="challenge_add_file">File</string>
     <string name="challenge_add_code">Code</string>

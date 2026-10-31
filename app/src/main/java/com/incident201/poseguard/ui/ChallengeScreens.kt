@@ -296,8 +296,11 @@ private fun ChallengeHub(
     var sendingReport by remember { mutableStateOf<ReportListItem?>(null) }
     val pasteEmptyText = localizedString(language, R.string.challenge_paste_empty)
 
-    val openFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) viewModel.importChallengeFromUri(uri)
+    val taskFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.importTaskFromUri(uri)
+    }
+    val reportFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.importReportFromUri(uri)
     }
 
     ChallengeScaffold(
@@ -315,27 +318,6 @@ private fun ChallengeHub(
             }
         }
     ) {
-        CardTitle(localizedString(language, R.string.challenge_add_title))
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { openFileLauncher.launch(arrayOf("*/*")) }, contentPadding = CompactButtonPadding, modifier = Modifier.weight(1f)) {
-                IconLabel(Icons.Filled.FileOpen, localizedString(language, R.string.challenge_add_file))
-            }
-            OutlinedButton(onClick = {
-                val text = ChallengeShare.pasteText(context)
-                if (text != null && ChallengeFiles.mentionsTextCode(text)) {
-                    viewModel.importChallengeFromText(text)
-                } else {
-                    Toast.makeText(context, pasteEmptyText, Toast.LENGTH_SHORT).show()
-                }
-            }, contentPadding = CompactButtonPadding, modifier = Modifier.weight(1f)) {
-                IconLabel(Icons.Filled.ContentPaste, localizedString(language, R.string.challenge_add_code))
-            }
-            OutlinedButton(onClick = onScanQr, contentPadding = CompactButtonPadding, modifier = Modifier.weight(1f)) {
-                IconLabel(Icons.Filled.QrCodeScanner, localizedString(language, R.string.challenge_add_qr))
-            }
-        }
-        Spacer(Modifier.height(12.dp))
         PrimaryTabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
             listOf(
                 R.string.challenges_tab_received to Icons.Filled.Inbox,
@@ -352,6 +334,37 @@ private fun ChallengeHub(
             }
         }
         Spacer(Modifier.height(12.dp))
+        if (tab == 2) {
+            OutlinedButton(
+                onClick = { reportFileLauncher.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                IconLabel(Icons.Filled.FileOpen, localizedString(language, R.string.report_import))
+            }
+            Spacer(Modifier.height(12.dp))
+        } else if (tab == 0) {
+            CardTitle(localizedString(language, R.string.challenge_add_title))
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { taskFileLauncher.launch(arrayOf("*/*")) }, contentPadding = CompactButtonPadding, modifier = Modifier.weight(1f)) {
+                    IconLabel(Icons.Filled.FileOpen, localizedString(language, R.string.challenge_add_file))
+                }
+                OutlinedButton(onClick = {
+                    val text = ChallengeShare.pasteText(context)
+                    if (text != null && ChallengeFiles.mentionsTextCode(text)) {
+                        viewModel.importChallengeFromText(text)
+                    } else {
+                        Toast.makeText(context, pasteEmptyText, Toast.LENGTH_SHORT).show()
+                    }
+                }, contentPadding = CompactButtonPadding, modifier = Modifier.weight(1f)) {
+                    IconLabel(Icons.Filled.ContentPaste, localizedString(language, R.string.challenge_add_code))
+                }
+                OutlinedButton(onClick = onScanQr, contentPadding = CompactButtonPadding, modifier = Modifier.weight(1f)) {
+                    IconLabel(Icons.Filled.QrCodeScanner, localizedString(language, R.string.challenge_add_qr))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         when (tab) {
             0 -> ReceivedList(language, received, onOpen = { onNavigate(ChallengePage.Brief(it.spec.id)) })
             1 -> {
@@ -1496,6 +1509,8 @@ internal fun importFeedback(language: AppLanguage, result: ImportResult): Pair<S
             ChallengeFileError.WrongDomain -> R.string.challenge_import_domain
             ChallengeFileError.Damaged -> R.string.challenge_import_damaged
             ChallengeFileError.UnknownChallenge -> R.string.challenge_import_unknown
+            ChallengeFileError.TaskExpected -> R.string.challenge_import_task_expected
+            ChallengeFileError.ReportExpected -> R.string.challenge_import_report_expected
         }
     ) to null
 }

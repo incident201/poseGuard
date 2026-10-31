@@ -140,6 +140,9 @@
     <string name="challenge_hidden_from_executor">für den Ausführenden verborgen</string>
     <string name="challenge_intiface_hint">Diese Regeln gelten beim Ausführenden mit dessen eigenem Gerät.</string>
     <string name="challenge_intiface_hint_offline">Intiface ist in dieser Version nicht verfügbar, die Regeln lassen sich aber festlegen: Sie gelten beim Ausführenden mit der Online-Version und dessen eigenem Gerät.</string>
+    <string name="report_import">Bericht importieren</string>
+    <string name="challenge_import_task_expected">Dies ist ein Bericht. Importieren Sie ihn im Tab „Berichte“.</string>
+    <string name="challenge_import_report_expected">Dies ist eine Aufgabe. Fügen Sie sie im Tab „Erhalten“ hinzu.</string>
     <string name="challenge_add_title">Aufgabe hinzufügen</string>
     <string name="challenge_add_file">Datei</string>
     <string name="challenge_add_code">Code</string>

@@ -18,7 +18,9 @@ enum class ChallengeFileError {
     /** Damaged, edited, or made by another build. */
     Damaged,
     /** A report for a challenge this device did not create. */
-    UnknownChallenge
+    UnknownChallenge,
+    TaskExpected,
+    ReportExpected
 }
 
 sealed class ChallengeFileResult<out T> {

@@ -140,6 +140,9 @@
     <string name="challenge_hidden_from_executor">скрыто от исполнителя</string>
     <string name="challenge_intiface_hint">Эти правила сработают у исполнителя с его собственным устройством.</string>
     <string name="challenge_intiface_hint_offline">В этой версии Intiface недоступен, но правила задать можно: они сработают у исполнителя с online-версией и его собственным устройством.</string>
+    <string name="report_import">Импортировать отчёт</string>
+    <string name="challenge_import_task_expected">Это отчёт. Импортируйте его на вкладке «Отчёты».</string>
+    <string name="challenge_import_report_expected">Это задание. Добавьте его на вкладке «Полученные».</string>
     <string name="challenge_add_title">Добавить задание</string>
     <string name="challenge_add_file">Файл</string>
     <string name="challenge_add_code">Код</string>

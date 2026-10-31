@@ -144,9 +144,22 @@ class ChallengeRepository(
     // Import
 
     /** Accepts a task file, a report file or text with a task code. */
-    fun import(data: ByteArray, nowMs: Long = System.currentTimeMillis()): ImportResult {
+    fun import(
+        data: ByteArray,
+        nowMs: Long = System.currentTimeMillis(),
+        expectedKind: ChallengeFileKind? = null
+    ): ImportResult {
         val bytes = ChallengeFiles.fileBytes(data)
-        return when (bytes?.let(files::kindOf)) {
+        val kind = bytes?.let(files::kindOf)
+        // Explicit in-app import actions must not save a different kind of document.
+        // External shares leave expectedKind unset and continue to accept both kinds.
+        if (kind != null && expectedKind != null && kind != expectedKind) {
+            return ImportResult.Failed(
+                if (expectedKind == ChallengeFileKind.Task) ChallengeFileError.TaskExpected
+                else ChallengeFileError.ReportExpected
+            )
+        }
+        return when (kind) {
             ChallengeFileKind.Task -> importTask(bytes, nowMs)
             ChallengeFileKind.Report -> importReport(bytes, nowMs)
             // A code cut off by a messenger is damaged, not something else.

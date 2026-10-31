@@ -72,6 +72,36 @@ class ChallengeExchangeTest {
         assertEquals(listOf(authored.spec.id), executor.receivedChallenges().map { it.spec.id })
     }
 
+    @Test fun explicitImportActionsAcceptTheirOwnKinds() {
+        val authored = author.create()
+        val received = executor.import(author.taskFile(authored.spec), expectedKind = ChallengeFileKind.Task)
+            as ImportResult.TaskImported
+        assertEquals(authored.spec, received.challenge.spec)
+        val report = executor.reportFor(received.challenge.spec, name = "Anna")
+        val incoming = author.import(report, expectedKind = ChallengeFileKind.Report) as ImportResult.ReportImported
+        assertEquals("Anna", incoming.report.report.executorName)
+        assertEquals(1, author.incomingReports().size)
+    }
+
+    @Test fun reportImportDoesNotSaveASelectedTask() {
+        val file = author.taskFile(author.create().spec)
+        assertEquals(ChallengeFileError.ReportExpected,
+            failure(executor.import(file, expectedKind = ChallengeFileKind.Report)))
+        assertTrue(executor.receivedChallenges().isEmpty())
+        assertTrue(executor.incomingReports().isEmpty())
+    }
+
+    @Test fun taskImportsDoNotSaveASelectedReportOrAReportDisguisedAsATextCode() {
+        val authored = author.create()
+        val spec = executor.importTask(author.taskFile(authored.spec)).spec
+        val report = executor.reportFor(spec)
+        for (data in listOf(report, ChallengeFiles.toTextCode(report).bytes())) {
+            assertEquals(ChallengeFileError.TaskExpected,
+                failure(author.import(data, expectedKind = ChallengeFileKind.Task)))
+            assertTrue(author.incomingReports().isEmpty())
+        }
+    }
+
     @Test fun taskTravelsAsATextCode() {
         val authored = author.create()
         val code = ChallengeFiles.toTextCode(author.taskFile(authored.spec))
