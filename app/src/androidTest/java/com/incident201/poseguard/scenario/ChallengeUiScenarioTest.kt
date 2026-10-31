@@ -2,10 +2,19 @@ package com.incident201.poseguard.scenario
 
 import android.Manifest
 import android.app.Application
+import android.content.ContentUris
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.MediaStore
+import android.view.WindowManager
+import android.view.inspector.WindowInspector
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -25,6 +34,7 @@ import com.incident201.poseguard.challenge.ChallengeRepository
 import com.incident201.poseguard.challenge.ChallengeRules
 import com.incident201.poseguard.challenge.ChallengeSpec
 import com.incident201.poseguard.challenge.ChallengeVisibility
+import com.incident201.poseguard.challenge.QrCodes
 import com.incident201.poseguard.challenge.TimerSpec
 import com.incident201.poseguard.ui.ChallengeShare
 import com.incident201.poseguard.viewmodel.AppLanguage
@@ -32,6 +42,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.io.File
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -234,6 +245,128 @@ class ChallengeUiScenarioTest {
             assertNull(appRepository.receivedChallenge(spec.id))
             // Still on the hub: nothing was opened.
             awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+        }
+    }
+
+    @Test fun fullscreenQrLocksPortraitRestoresWindowAndSavesALosslessImage() {
+        val spec = appRepository.create("Share this challenge").also { authoredIds += it.id }
+        val imagesBefore = savedQrImages()
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var originalBrightness = -1f
+                scenario.onActivity {
+                    originalBrightness = it.window.attributes.screenBrightness
+                    it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                }
+                awaitCondition("initial landscape configuration") {
+                    var landscape = false
+                    scenario.onActivity { landscape = it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
+                    landscape
+                }
+                InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(1_000, 5_000)
+                awaitNode("main screen", hasText(text(R.string.start)))
+                compose.onNodeWithContentDescription(text(R.string.challenges_title)).performClick()
+                awaitNode("challenges hub", hasText(text(R.string.challenge_add_title)))
+                compose.onNodeWithText(text(R.string.challenges_tab_mine)).performClick()
+                awaitNode("own task", hasText(spec.title))
+                compose.onNodeWithText(spec.title).performClick()
+                awaitNode("share card", hasText(text(R.string.challenge_show_qr)))
+                compose.onNodeWithText(text(R.string.challenge_show_qr)).performScrollTo().performClick()
+
+                awaitNode("QR image", hasContentDescription(text(R.string.challenge_show_qr)))
+                scenario.onActivity { assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, it.requestedOrientation) }
+                awaitCondition("QR forces portrait") {
+                    var portrait = false
+                    scenario.onActivity { portrait = it.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
+                    portrait
+                }
+                val code = assertDisplayedQr(spec, "portrait")
+                onMain {
+                    val qrWindow = WindowInspector.getGlobalWindowViews().mapNotNull {
+                        it.layoutParams as? WindowManager.LayoutParams
+                    }.single { it.screenBrightness == 1f }
+                    assertTrue(qrWindow.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0)
+                }
+                scenario.onActivity { assertEquals(originalBrightness, it.window.attributes.screenBrightness) }
+
+                compose.onNodeWithText(text(R.string.challenge_qr_save)).performClick()
+                awaitCondition("published PNG", 15_000) { (savedQrImages() - imagesBefore).isNotEmpty() }
+                val uri = (savedQrImages() - imagesBefore).single()
+                val bitmap = app.contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it) }!!
+                try {
+                    assertEquals(2048, bitmap.width)
+                    assertEquals(2048, bitmap.height)
+                    assertEquals(code, QrCodes.decode(bitmap))
+                    assertEquals(android.graphics.Color.WHITE, bitmap.getPixel(0, 0))
+                } finally { bitmap.recycle() }
+                assertEquals("image/png", app.contentResolver.getType(uri))
+
+                compose.onNodeWithContentDescription(text(R.string.final_close)).performClick()
+                compose.waitForIdle()
+                scenario.onActivity {
+                    assertEquals(originalBrightness, it.window.attributes.screenBrightness)
+                    assertEquals(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, it.requestedOrientation)
+                }
+                onMain {
+                    assertTrue(WindowInspector.getGlobalWindowViews().none {
+                        (it.layoutParams as? WindowManager.LayoutParams)?.screenBrightness == 1f
+                    })
+                }
+                // The system Back button must dismiss the same bright window too.
+                compose.onNodeWithText(text(R.string.challenge_show_qr)).performScrollTo().performClick()
+                awaitNode("QR image", hasContentDescription(text(R.string.challenge_show_qr)))
+                scenario.onActivity { assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, it.requestedOrientation) }
+                androidx.test.espresso.Espresso.pressBack()
+                compose.waitForIdle()
+                assertTrue(compose.onAllNodes(hasContentDescription(text(R.string.challenge_show_qr))).fetchSemanticsNodes().isEmpty())
+                scenario.onActivity {
+                    assertEquals(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, it.requestedOrientation)
+                    it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+        } finally {
+            (savedQrImages() - imagesBefore).forEach { app.contentResolver.delete(it, null, null) }
+        }
+    }
+
+    private fun assertDisplayedQr(spec: ChallengeSpec, orientation: String): String {
+        awaitNode("QR image", hasContentDescription(text(R.string.challenge_show_qr)))
+        compose.waitForIdle()
+        val bounds = compose.onNodeWithContentDescription(text(R.string.challenge_show_qr)).fetchSemanticsNode().boundsInRoot
+        val metrics = app.resources.displayMetrics
+        assertTrue("QR must use almost the entire screen width: $bounds", bounds.width >= minOf(metrics.widthPixels, metrics.heightPixels) * 0.9f)
+        var screenshot: Bitmap? = null
+        var decoded: String? = null
+        try {
+            // WindowManager can still animate rotation, or show a previous test's toast,
+            // after Compose becomes idle. Wait for an unobscured, readable display frame.
+            awaitCondition("readable QR on the actual $orientation display", 10_000) {
+                screenshot?.recycle()
+                screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+                decoded = QrCodes.decode(screenshot)
+                decoded != null
+            }
+            val code = decoded!!
+            // Export envelopes use fresh encryption nonces, so compare the decoded task.
+            val task = ChallengeFiles.fromTextCode(code) ?: error("QR is not a task")
+            assertEquals(ChallengeFileResult.Ok(spec), appRepository.files.decodeTask(task))
+            return code
+        } finally {
+            screenshot?.let { bitmap ->
+                File(app.getExternalFilesDir(null), "qr-preview-$orientation.png").outputStream().use {
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+                }
+                bitmap.recycle()
+            }
+        }
+    }
+
+    private fun savedQrImages(): Set<Uri> {
+        val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        return app.contentResolver.query(collection, arrayOf(MediaStore.Images.Media._ID),
+            "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? AND ${MediaStore.Images.Media.IS_PENDING} = 0",
+            arrayOf("poseguard_qr_%.png"), null)!!.use { cursor ->
+            buildSet { while (cursor.moveToNext()) add(ContentUris.withAppendedId(collection, cursor.getLong(0))) }
         }
     }
 }

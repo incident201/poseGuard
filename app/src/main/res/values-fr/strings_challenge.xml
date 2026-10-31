@@ -59,6 +59,10 @@
     <string name="challenge_share_code">Envoyer en texte</string>
     <string name="challenge_copy_code">Copier</string>
     <string name="challenge_show_qr">Code QR</string>
+    <string name="challenge_qr_save">Enregistrer l’image</string>
+    <string name="challenge_qr_saving">Enregistrement…</string>
+    <string name="challenge_qr_saved">QR code enregistré dans Pictures/PoseGuard</string>
+    <string name="challenge_qr_save_error">Impossible d’enregistrer le QR code. Réessayez.</string>
     <string name="challenge_qr_too_large">Ce défi est trop volumineux pour un QR code. Envoyez-le en fichier ou en texte.</string>
     <string name="challenge_code_copied">Code copié</string>
     <string name="challenge_share_text">Défi PoseGuard « %1$s ». Ouvrez-le dans PoseGuard : %2$s</string>

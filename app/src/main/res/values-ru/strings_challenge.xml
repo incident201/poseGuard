@@ -59,6 +59,10 @@
     <string name="challenge_share_code">Отправить текстом</string>
     <string name="challenge_copy_code">Копировать</string>
     <string name="challenge_show_qr">QR-код</string>
+    <string name="challenge_qr_save">Сохранить картинку</string>
+    <string name="challenge_qr_saving">Сохраняем…</string>
+    <string name="challenge_qr_saved">QR-код сохранён в Pictures/PoseGuard</string>
+    <string name="challenge_qr_save_error">Не удалось сохранить QR-код. Попробуйте ещё раз.</string>
     <string name="challenge_qr_too_large">Задание слишком большое для QR-кода. Отправьте его файлом или текстом.</string>
     <string name="challenge_code_copied">Код скопирован</string>
     <string name="challenge_share_text">Задание PoseGuard «%1$s». Откройте его в PoseGuard: %2$s</string>

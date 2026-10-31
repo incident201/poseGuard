@@ -59,6 +59,10 @@
     <string name="challenge_share_code">Invia come testo</string>
     <string name="challenge_copy_code">Copia</string>
     <string name="challenge_show_qr">Codice QR</string>
+    <string name="challenge_qr_save">Salva immagine</string>
+    <string name="challenge_qr_saving">Salvataggio…</string>
+    <string name="challenge_qr_saved">Codice QR salvato in Pictures/PoseGuard</string>
+    <string name="challenge_qr_save_error">Impossibile salvare il codice QR. Riprova.</string>
     <string name="challenge_qr_too_large">Questa sfida è troppo grande per un codice QR. Inviala come file o testo.</string>
     <string name="challenge_code_copied">Codice copiato</string>
     <string name="challenge_share_text">Sfida PoseGuard «%1$s». Aprila in PoseGuard: %2$s</string>

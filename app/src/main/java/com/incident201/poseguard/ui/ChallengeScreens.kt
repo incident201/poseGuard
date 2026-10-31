@@ -1,7 +1,6 @@
 package com.incident201.poseguard.ui
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Handler
@@ -11,7 +10,6 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -45,7 +43,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -62,7 +59,6 @@ import com.incident201.poseguard.challenge.ChallengeReport
 import com.incident201.poseguard.challenge.ChallengeSpec
 import com.incident201.poseguard.challenge.ImportResult
 import com.incident201.poseguard.challenge.ReportListItem
-import com.incident201.poseguard.challenge.QrCodes
 import com.incident201.poseguard.challenge.ReceivedChallenge
 import com.incident201.poseguard.challenge.ReportVerifier
 import com.incident201.poseguard.challenge.AudioAttachResult
@@ -1162,32 +1158,8 @@ private fun ShareChallengeCard(viewModel: GameViewModel, language: AppLanguage, 
     }
 
     if (showQr && code != null) {
-        val qr = remember(code) { QrCodes.encode(code, 900) }
-        AlertDialog(
-            onDismissRequest = { showQr = false },
-            confirmButton = { TextButton(onClick = { showQr = false }) { Text(localizedString(language, R.string.final_close)) } },
-            title = { Text(spec.title) },
-            text = {
-                if (qr != null) {
-                    QrImage(qr)
-                } else {
-                    Text(localizedString(language, R.string.challenge_qr_too_large))
-                }
-            }
-        )
+        ChallengeQrDialog(code, spec.title, language, onDismiss = { showQr = false })
     }
-}
-
-@Composable
-private fun QrImage(bitmap: Bitmap) {
-    Image(
-        bitmap = bitmap.asImageBitmap(),
-        contentDescription = null,
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .background(androidx.compose.ui.graphics.Color.White)
-    )
 }
 
 /**
