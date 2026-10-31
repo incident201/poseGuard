@@ -59,6 +59,7 @@ Install **online** if you need integrations with external services, Intiface Cen
 - Can optionally monitor whether the subject turns toward the camera or away from it
 - Allows sensitivity adjustment for tracking and violation detection thresholds
 - Can record a short timelapse video of the session
+- Create and share challenges with custom rules, optional hidden conditions and attempt limits, then review reports with movement replay and automatic checks
 - Supports optional external device feedback in the online version
 
 ## How it works
