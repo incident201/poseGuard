@@ -161,9 +161,19 @@ class ChallengeExchangeScenarioTest {
         }
     }
 
+    @Test fun qrWithThePayloadThatPreviouslyConfusedTheDetectorIsReadable() {
+        val code = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("qr-detector-edge.txt").bufferedReader().use { it.readText().trim() }
+        assertQrReadable(code)
+    }
+
     @Test fun qrCodesOfTypicalTasksAreReadBackFromACameraFrame() {
         val (_, file) = foreignTask()
         val code = ChallengeFiles.toTextCode(file)
+        assertQrReadable(code)
+    }
+
+    private fun assertQrReadable(code: String) {
         assertTrue("code of ${code.length} chars must fit a QR code", QrCodes.canEncode(code))
         val qr = QrCodes.encode(code, 900)!!
         assertEquals(code, QrCodes.decode(qr))

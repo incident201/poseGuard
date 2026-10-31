@@ -30,7 +30,9 @@ internal class MediaPipePoseLandmarkerFactory(
         onError: (RuntimeException) -> Unit
     ): PoseLandmarkerEngine {
         val options = PoseLandmarker.PoseLandmarkerOptions.builder()
-            .setBaseOptions(BaseOptions.builder().setModelAssetPath(model.assetPath).setDelegate(delegate).build())
+            .setBaseOptions(BaseOptions.builder()
+                .setModelAssetBuffer(MediaPipeModelBuffers.load(context, model.assetPath))
+                .setDelegate(delegate).build())
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setNumPoses(1)
             .setMinPoseDetectionConfidence(0.70f)

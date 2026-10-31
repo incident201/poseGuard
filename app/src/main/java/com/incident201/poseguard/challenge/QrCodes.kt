@@ -7,9 +7,9 @@ import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.EncodeHintType
 import com.google.zxing.MultiFormatReader
-import com.google.zxing.NotFoundException
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.multi.qrcode.QRCodeMultiReader
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 
@@ -55,20 +55,20 @@ object QrCodes {
         if (width <= 0 || height <= 0 || bitmap.isRecycled) return null
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-        val reader = MultiFormatReader().apply {
-            setHints(
-                mapOf(
-                    DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                    DecodeHintType.TRY_HARDER to true
-                )
-            )
-        }
+        val hints = mapOf(
+            DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+            DecodeHintType.TRY_HARDER to true
+        )
+        val reader = MultiFormatReader().apply { setHints(hints) }
+        val binary = BinaryBitmap(HybridBinarizer(RGBLuminanceSource(width, height, pixels)))
         return try {
-            reader.decodeWithState(BinaryBitmap(HybridBinarizer(RGBLuminanceSource(width, height, pixels)))).text
-        } catch (_: NotFoundException) {
-            null
+            reader.decodeWithState(binary).text
         } catch (_: Exception) {
-            null
+            // Payload data can resemble an extra finder pattern. The single-code detector
+            // then selects the wrong triplet; the multi-code detector checks alternatives.
+            runCatching { QRCodeMultiReader().decodeMultiple(binary, hints).firstOrNull()?.text }.getOrNull()
+        } finally {
+            reader.reset()
         }
     }
 }

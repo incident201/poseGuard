@@ -1,6 +1,10 @@
 package com.incident201.poseguard.scenario
 
+import android.Manifest
+import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.incident201.poseguard.BuildConfig
 import com.incident201.poseguard.audio.AudioCue
 import com.incident201.poseguard.challenge.*
 import com.incident201.poseguard.intiface.*
@@ -26,6 +30,13 @@ class ChallengeIntifaceScenarioTest : SessionFixture() {
     internal override fun timing() = SessionTiming(now::get, 0, 1)
 
     private fun acceptTask(required: Boolean = true) {
+        // Installing offline removes this online-only permission on Android 17.
+        // The fake controller still goes through the production permission gate.
+        if (BuildConfig.HAS_NETWORK_FEATURES && Build.VERSION.SDK_INT >= 37) {
+            InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(
+                app.packageName, Manifest.permission.ACCESS_LOCAL_NETWORK
+            )
+        }
         onMain { model.updateIntifaceConnectionEnabled(true) }
         task = model.challengeRepository.createChallenge("Intiface", "", "Test",
             ChallengeRules(timer = TimerSpec(exactSeconds = 1), intifaceRequired = required), ChallengeVisibility(), 0)

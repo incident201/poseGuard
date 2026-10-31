@@ -94,4 +94,26 @@ class CameraSmokeTest {
             }
         }
     }
+
+    @Test fun rapidActivityRecreationKeepsNativeDetectorsAlive() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val prefs = app.getSharedPreferences("game_settings", Context.MODE_PRIVATE)
+        PreferencesSnapshot(prefs).use {
+            check(prefs.edit().clear().putBoolean("onboarding_completed", true)
+                .putBoolean("timelapse_recording_enabled", false).putString("acceleration_mode", "Cpu")
+                .putString("pose_landmarker_model", "Full").commit())
+            InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(app.packageName, Manifest.permission.CAMERA)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                // Do not wait for each graph to initialize: Activity teardown and the next
+                // native graph creation must overlap, as they did in the release crash.
+                repeat(10) { scenario.recreate() }
+                lateinit var model: GameViewModel
+                scenario.onActivity { model = ViewModelProvider(it)[GameViewModel::class.java] }
+                awaitUi("real MediaPipe result after rapid recreation", 30_000) {
+                    model.poseOverlayState.value.imageWidth > 0
+                }
+                assertEquals(GameState.Idle, model.gameState.value)
+            }
+        }
+    }
 }

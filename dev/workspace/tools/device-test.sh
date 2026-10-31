@@ -100,6 +100,7 @@ adb install -r "$app_apk"
 adb install -r "$test_apk"
 camera_class=com.incident201.poseguard.scenario.CameraSmokeTest
 ui_class=com.incident201.poseguard.scenario.AppFlowScenarioTest
+challenge_ui_class=com.incident201.poseguard.scenario.ChallengeUiScenarioTest
 runner_args=()
 case "$suite" in
   core|all) runner_args+=(-e notAnnotation androidx.test.filters.LargeTest) ;;
@@ -135,6 +136,7 @@ if [[ "$suite" == all ]]; then
   run_instrumentation "$output/instrumentation.log" "${runner_args[@]}"
   run_instrumentation "$output/camera.log" -e class "$camera_class"
   run_instrumentation "$output/ui.log" -e class "$ui_class"
+  run_instrumentation "$output/challenge-ui.log" -e class "$challenge_ui_class"
 elif [[ "$suite" != restart ]]; then
   run_instrumentation "$output/instrumentation.log" "${runner_args[@]}"
 fi

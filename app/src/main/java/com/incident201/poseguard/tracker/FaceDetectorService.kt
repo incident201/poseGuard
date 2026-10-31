@@ -83,7 +83,8 @@ class FaceDetectorService(
         faceDetector = null
         initializationError = ""
         try {
-            val baseOptions = BaseOptions.builder().setDelegate(Delegate.CPU).setModelAssetPath(FACE_DETECTOR_MODEL_ASSET).build()
+            val baseOptions = BaseOptions.builder().setDelegate(Delegate.CPU)
+                .setModelAssetBuffer(MediaPipeModelBuffers.load(context, FACE_DETECTOR_MODEL_ASSET)).build()
             val options = FaceDetector.FaceDetectorOptions.builder().setBaseOptions(baseOptions).setRunningMode(RunningMode.IMAGE).setMinDetectionConfidence(minDetectionConfidence).build()
             faceDetector = FaceDetector.createFromOptions(context, options)
             Log.i(tag, "Face detector loaded successfully confidence=$minDetectionConfidence")
