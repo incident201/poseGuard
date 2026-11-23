@@ -53,7 +53,7 @@ yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses > "$workspace/artifacts/s
 license_status="${PIPESTATUS[1]}"
 set -o pipefail
 [[ "$license_status" == 0 ]] || { cat "$workspace/artifacts/sdk-licenses.log" >&2; exit "$license_status"; }
-sdkmanager --sdk_root="$ANDROID_HOME" 'platform-tools' 'platforms;android-37.0' 'build-tools;37.0.0' 'sources;android-37.0'
+sdkmanager --sdk_root="$ANDROID_HOME" 'platform-tools' 'platforms;android-37.0' 'platforms;android-37.1' 'build-tools;37.0.0' 'sources;android-37.0'
 if [[ ! -e "$ANDROID_HOME/platforms/android-37" ]]; then
   ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"
 fi
